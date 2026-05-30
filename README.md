@@ -4,10 +4,7 @@
 </p>
 
 <p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="assets/Qzone-logo.png">
-    <img src="assets/Qzone-logo.png" alt="QQ空间时光机" width="200" style="background:#f5f5f5;border-radius:24px;padding:16px">
-  </picture>
+  <img src="assets/Qzone-logo.png" alt="QQ空间时光机" width="200">
 </p>
 
 <h1 align="center">QQ空间时光机</h1>
