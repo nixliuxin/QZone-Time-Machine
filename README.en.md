@@ -8,7 +8,7 @@
 </p>
 
 <h1 align="center">QZone Time Machine</h1>
-<p align="center"><code>QZone-Tools</code></p>
+<p align="center"><code>QZone-Time-Machine</code></p>
 
 <p align="center">
   <strong>Archive memories, preserve emotions</strong>
@@ -124,7 +124,7 @@ After backup, a React SPA is automatically embedded into `index.html`:
 ## Architecture
 
 ```
-QZone-Tools (pnpm monorepo)
+QZone-Time-Machine (pnpm monorepo)
 ├── packages/cli          TypeScript CLI + CommonJS engine
 │   ├── src/index.ts      Entry point (login / backup / convert)
 │   ├── src/convert.ts    Legacy data migration

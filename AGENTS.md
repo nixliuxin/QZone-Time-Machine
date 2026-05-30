@@ -1,4 +1,4 @@
-# QZone-Tools — Project Conventions
+# QZone-Time-Machine — Project Conventions
 
 This file is auto-loaded by Cursor when the agent works anywhere inside
 this repository. It defines project-wide rules, layout, and pipeline.
@@ -11,7 +11,7 @@ For format-specific knowledge, see `.cursor/rules/`:
 
 ## What this repo is
 
-Open-source monorepo for **QZone-Tools** — a toolkit that backs up QQ Zone
+Open-source monorepo for **QZone-Time-Machine** — a toolkit that backs up QQ Zone
 (QQ 空间) data and provides an offline viewer. Ships a CLI application
 (`packages/cli`) and a React single-page viewer (`packages/viewer`).
 

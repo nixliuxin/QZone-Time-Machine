@@ -1,17 +1,17 @@
-const GITHUB_URL = 'https://github.com/nixliuxin/QZone-Tools';
+const GITHUB_URL = 'https://github.com/nixliuxin/QZone-Time-Machine';
 
 export function About() {
   return (
     <div className="p-6 max-w-2xl mx-auto">
       <div className="text-center mb-10">
-        <h1 className="text-3xl font-bold text-[hsl(var(--foreground))] mb-2">QZone-Tools</h1>
+        <h1 className="text-3xl font-bold text-[hsl(var(--foreground))] mb-2">QQ空间时光机</h1>
         <p className="text-lg text-[hsl(var(--muted-foreground))]">备份你的 QQ 空间回忆，在它们消失之前。</p>
       </div>
 
       <section className="space-y-6">
         <Card title="关于">
           <p className="text-sm text-[hsl(var(--foreground))] leading-relaxed">
-            QZone-Tools 是一个开源的 QQ 空间数据备份工具。它能完整保存你的说说、日志、相册、视频、留言板等所有内容，
+            QQ空间时光机是一个开源的 QQ 空间数据备份工具。它能完整保存你的说说、日志、相册、视频、留言板等所有内容，
             并生成一个可以离线浏览的 HTML 文件——双击即可打开，无需联网，无需安装任何软件。
           </p>
           <p className="text-sm text-[hsl(var(--muted-foreground))] mt-3 leading-relaxed">

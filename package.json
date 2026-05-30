@@ -1,12 +1,12 @@
 {
-  "name": "qzone-tools",
+  "name": "qzone-time-machine",
   "version": "0.1.0",
   "private": true,
   "description": "QQ Zone backup toolkit – CLI engine + offline viewer",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/nixliuxin/QZone-Tools.git"
+    "url": "https://github.com/nixliuxin/QZone-Time-Machine.git"
   },
   "scripts": {
     "cli": "node packages/cli/dist/index.js",

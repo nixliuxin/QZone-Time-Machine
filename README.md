@@ -8,7 +8,7 @@
 </p>
 
 <h1 align="center">QQ空间时光机</h1>
-<p align="center"><code>QZone-Tools</code></p>
+<p align="center"><code>QZone-Time-Machine</code></p>
 
 <p align="center">
   <strong>存档回忆，留住感动</strong>
@@ -124,7 +124,7 @@ pnpm cli -- convert ./旧数据目录 ./输出目录
 ## 技术架构
 
 ```
-QZone-Tools (pnpm monorepo)
+QZone-Time-Machine (pnpm monorepo)
 ├── packages/cli          TypeScript CLI + CommonJS 引擎
 │   ├── src/index.ts      命令入口 (login / backup / convert)
 │   ├── src/convert.ts    旧版数据迁移

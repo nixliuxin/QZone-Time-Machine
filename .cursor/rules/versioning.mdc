@@ -1,11 +1,11 @@
 ---
-description: SemVer versioning policy for QZone-Tools releases
+description: SemVer versioning policy for QZone-Time-Machine releases
 alwaysApply: true
 ---
 
 # Versioning Policy
 
-QZone-Tools uses **SemVer** to communicate change impact to users.
+QZone-Time-Machine uses **SemVer** to communicate change impact to users.
 
 | Bump | When | Examples |
 |------|------|----------|
