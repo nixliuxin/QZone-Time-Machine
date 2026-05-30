@@ -171,10 +171,11 @@ function convertAlbums(sourceDir: string, outputDataDir: string, outputDir: stri
     copyDirRecursive(join(albumsRoot, subDir), join(outputDir, 'media', 'albums', 'photos', subDir));
   }
 
-  const albumIndex: { id: string; name: string; className: string; total?: number; cover_url?: string; createtime?: string }[] = [];
+  const albumIndex: { id: string; name: string; className: string; total?: number; cover_url?: string; createtime?: string; lastuploadtime?: string; desc?: string }[] = [];
 
   for (const album of albums) {
     const correctClass = resolveClassName(album);
+    const lastupload = (album as Record<string, unknown>).lastuploadtime as number | undefined;
     albumIndex.push({
       id: album.id,
       name: album.name,
@@ -182,6 +183,8 @@ function convertAlbums(sourceDir: string, outputDataDir: string, outputDir: stri
       total: album.total ?? album.photoList?.length ?? 0,
       cover_url: getAlbumCoverPath(album, correctClass),
       createtime: album.createtime ? new Date(album.createtime * 1000).toISOString() : undefined,
+      lastuploadtime: lastupload ? new Date(lastupload * 1000).toISOString() : undefined,
+      desc: album.desc || undefined,
     });
 
     if (album.photoList && album.photoList.length > 0) {

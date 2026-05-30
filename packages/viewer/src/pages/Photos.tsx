@@ -14,6 +14,7 @@ interface Album {
   cover_url?: string;
   custom_filepath?: string;
   createtime?: string;
+  lastuploadtime?: string;
   modifytime?: number;
   desc?: string;
 }
@@ -138,7 +139,10 @@ export function PhotoAlbumDetail() {
       <Link to="/photos" className="mb-3 inline-block text-sm text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))] transition">&larr; 返回相册列表</Link>
       <h3 className="text-lg font-bold text-[hsl(var(--foreground))] mb-1">{albumName}</h3>
       {album?.desc && <p className="text-sm text-[hsl(var(--muted-foreground))] mb-1">{album.desc}</p>}
-      {album?.createtime && <p className="text-xs text-[hsl(var(--muted-foreground))] mb-4">创建: {formatDateShort(album.createtime)}</p>}
+      <div className="flex gap-4 text-xs text-[hsl(var(--muted-foreground))] mb-4">
+        {album?.createtime && <span>创建: {formatDateShort(album.createtime)}</span>}
+        {album?.lastuploadtime && <span>最后上传: {formatDateShort(album.lastuploadtime)}</span>}
+      </div>
 
       {loading ? (
         <div className="text-[hsl(var(--muted-foreground))]">加载中...</div>
@@ -193,16 +197,16 @@ function PhotoThumb({ photo, albumId, index }: { photo: Photo; albumId: string; 
           </div>
         )}
       </div>
-      {/* Always show name */}
       <div className="p-1.5 min-h-[2rem]">
         <p className="text-xs text-[hsl(var(--foreground))] truncate">{name || '未命名'}</p>
+        {photo.desc && photo.desc !== photo.name && <p className="text-xs text-[hsl(var(--muted-foreground))] truncate">{photo.desc}</p>}
       </div>
-      {/* Hover tooltip with metadata */}
       <div className="absolute inset-x-0 top-0 p-2 bg-gradient-to-b from-black/60 to-transparent opacity-0 group-hover:opacity-100 transition-opacity">
         <div className="text-xs text-white/90 space-y-0.5">
           <div>拍摄: {shootStr || '未知'}</div>
           <div>上传: {uploadStr || '未知'}</div>
           {photo.width && photo.height && <div>{photo.width}×{photo.height}</div>}
+          {photo.poiName && <div>📍 {photo.poiName}</div>}
         </div>
       </div>
     </Link>

@@ -48,6 +48,8 @@ interface Message {
   cmtnum?: number;
   commenttotal?: number;
   likenum?: number;
+  fwdnum?: number;
+  rt_sum?: number;
   name?: string;
   source_name?: string;
 }
@@ -169,10 +171,11 @@ function MessageCard({ message }: { message: Message }) {
         </div>
       )}
 
-      <footer className="mt-3 flex items-center gap-3 text-xs text-[hsl(var(--muted-foreground))]">
+      <footer className="mt-3 flex items-center flex-wrap gap-3 text-xs text-[hsl(var(--muted-foreground))]">
         <time>{timeStr}</time>
         {location && <span>📍 {location}</span>}
         {message.source_name && <span className="opacity-70">{message.source_name}</span>}
+        {(message.fwdnum ?? message.rt_sum ?? 0) > 0 && <span>🔁 {message.fwdnum || message.rt_sum}</span>}
         {(message.likenum ?? 0) > 0 && <span>👍 {message.likenum}</span>}
         {commentCount > 0 && (
           <button
