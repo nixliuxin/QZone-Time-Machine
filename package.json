@@ -1,0 +1,21 @@
+{
+  "name": "qzone-tools",
+  "version": "0.1.0",
+  "private": true,
+  "description": "QQ Zone backup toolkit – CLI engine + offline viewer",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/nixliuxin/QZone-Tools.git"
+  },
+  "scripts": {
+    "cli": "node packages/cli/dist/index.js",
+    "build:cli": "pnpm --filter @qzone-tools/cli run build",
+    "build:viewer": "pnpm --filter @qzone-tools/viewer run build",
+    "build": "pnpm build:cli && pnpm build:viewer"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "packageManager": "pnpm@9.15.0"
+}

@@ -1,0 +1,23 @@
+---
+description: SemVer versioning policy for QZone-Tools releases
+alwaysApply: true
+---
+
+# Versioning Policy
+
+QZone-Tools uses **SemVer** to communicate change impact to users.
+
+| Bump | When | Examples |
+|------|------|----------|
+| **patch** x.x.+1 | Bug fixes, internal improvements users barely notice | Retry logic fix, edge-case parse fix, refactor |
+| **minor** x.+1.0 | Changes users actively notice — new capabilities, UX improvements | New backup module, viewer feature, new output format |
+| **major** +1.0.0 | Breaking changes to CLI flags, output format, or data layout | JSON schema change, removed command |
+
+Rule of thumb: if the release notes wouldn't excite a typical user,
+it's a **patch**.
+
+## Version sources
+
+The single source of truth is the root `package.json` `version` field.
+Individual package versions (`packages/cli/package.json`,
+`packages/viewer/package.json`) should stay in sync.

@@ -1,0 +1,14 @@
+---
+description: Never add AI-tool attribution trailers to git commits
+alwaysApply: true
+---
+
+# No AI Attribution in Commits
+
+When creating git commit messages, **never** append any of these trailers:
+
+- `Co-authored-by: Cursor <cursoragent@cursor.com>`
+- `Made-with: Cursor`
+- Any other AI-tool attribution line
+
+Commit messages must contain only the human-authored subject and body.

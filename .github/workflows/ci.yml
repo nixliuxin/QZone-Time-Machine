@@ -1,0 +1,27 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Type-check CLI
+        run: pnpm --filter @qzone-tools/cli run build
+      - name: Type-check Viewer
+        run: pnpm --filter @qzone-tools/viewer exec tsc --noEmit
+      - name: Build Viewer
+        run: pnpm --filter @qzone-tools/viewer run build

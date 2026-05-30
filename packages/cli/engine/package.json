@@ -1,0 +1,7 @@
+{
+  "name": "@qzone-tools/engine",
+  "version": "0.1.0",
+  "private": true,
+  "type": "commonjs",
+  "description": "QZone backup engine - proven data collection logic"
+}
