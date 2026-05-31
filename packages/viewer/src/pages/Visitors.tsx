@@ -20,7 +20,12 @@ interface VisitorEntry {
 
 export function Visitors() {
   const { data: raw, loading, error } = useData<VisitorEntry[] | { items: VisitorEntry[] }>('./data/visitors.json');
-  const visitors = raw ? (Array.isArray(raw) ? raw : raw.items ?? []) : [];
+  const allVisitors = raw ? (Array.isArray(raw) ? raw : raw.items ?? []) : [];
+  // Deduplicate by uin+time
+  const visitors = allVisitors.filter((v, i, arr) => {
+    const key = `${v.uin ?? ''}-${v.time ?? ''}-${v.custom_time ?? ''}`;
+    return arr.findIndex(x => `${x.uin ?? ''}-${x.time ?? ''}-${x.custom_time ?? ''}` === key) === i;
+  });
   const { paged, currentPage, totalPages, total: visitorTotal, setPage, pageSize } = usePagination(visitors);
 
   if (loading) return <div className="p-6 text-[hsl(var(--muted-foreground))]">加载中...</div>;
@@ -68,7 +73,7 @@ export function Visitors() {
                       <div className="flex items-center gap-3">
                         <QQLink uin={v.uin} className="shrink-0">
                           <img
-                            src={v.avatar || (v.uin ? `https://q.qlogo.cn/headimg_dl?dst_uin=${v.uin}&spec=640` : '')}
+                            src={v.uin ? `./media/avatars/${v.uin}.jpg` : ''}
                             alt=""
                             className="w-8 h-8 rounded-full object-cover hover:ring-2 ring-[hsl(var(--border))] transition"
                             onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}

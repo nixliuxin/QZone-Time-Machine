@@ -4,8 +4,7 @@ import { useNavigate } from 'react-router-dom';
 /**
  * Global keyboard shortcuts:
  *   Left/Right Arrow - paginate (triggers prev/next page buttons)
- *   J/K             - scroll main content down/up
- *   Esc             - navigate back
+ *   Esc             - navigate back (only when no overlay is open)
  */
 export function useKeyboardNav() {
   const navigate = useNavigate();
@@ -14,8 +13,7 @@ export function useKeyboardNav() {
     function handler(e: KeyboardEvent) {
       const tag = (e.target as HTMLElement)?.tagName;
       if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
-
-      const main = document.querySelector('main');
+      if (document.querySelector('[data-lightbox]')) return;
 
       switch (e.key) {
         case 'ArrowLeft': {
@@ -24,20 +22,10 @@ export function useKeyboardNav() {
           break;
         }
         case 'ArrowRight': {
-          const nextBtn = document.querySelector<HTMLButtonElement>(
-            '[data-kbd="next"]'
-          );
+          const nextBtn = document.querySelector<HTMLButtonElement>('[data-kbd="next"]');
           if (nextBtn && !nextBtn.disabled) { nextBtn.click(); e.preventDefault(); }
           break;
         }
-        case 'j':
-        case 'J':
-          if (main) { main.scrollBy({ top: 200, behavior: 'smooth' }); e.preventDefault(); }
-          break;
-        case 'k':
-        case 'K':
-          if (main) { main.scrollBy({ top: -200, behavior: 'smooth' }); e.preventDefault(); }
-          break;
         case 'Escape':
           navigate(-1);
           e.preventDefault();

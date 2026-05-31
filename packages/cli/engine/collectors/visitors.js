@@ -7,12 +7,12 @@
 
 const path = require('path');
 const fs = require('fs');
-const { writeData, readData } = require('./_util.js');
+const { writeData, readData, randomSleep } = require('./_util.js');
 const visitorsApi = require('../api/visitors.js');
-const { sleep, NoAccessError, AuthInvalidError } = require('../client.js');
+const { NoAccessError, AuthInvalidError } = require('../client.js');
 
 const EMPTY_PAGE_THRESHOLD = 3;
-const PAGE_SLEEP_MS = 700;
+const PAGE_SLEEP_MS = 1500;
 
 async function collectVisitors({
   client,
@@ -87,7 +87,7 @@ async function collectVisitors({
       logger.info(`[visitors] page ${page}: +${list.length} => total ${all.length}/${totalReported || '?'} (totalpage=${totalPage || '?'})`);
       if (totalPage && page + 1 >= totalPage) break;
     }
-    await sleep(PAGE_SLEEP_MS);
+    await randomSleep(PAGE_SLEEP_MS);
   }
 
   writeData(outFile, { items: all, total: totalReported, totalPage: lastTotalPage });

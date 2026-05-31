@@ -17,14 +17,14 @@
 
 const fs = require('fs');
 const path = require('path');
-const { writeData, readData, sanitizeFilename, shortHash, extFromUrl, preferOriginal, ensureDir } =
+const { writeData, readData, sanitizeFilename, shortHash, extFromUrl, preferOriginal, ensureDir, randomSleep } =
   require('./_util.js');
 const photosApi = require('../api/photos.js');
-const { sleep, NoAccessError, AuthInvalidError } = require('../client.js');
+const { NoAccessError, AuthInvalidError } = require('../client.js');
 
 const ALBUM_PAGE_SIZE = 30;
 const IMAGE_PAGE_SIZE = 500;
-const PAGE_SLEEP_MS = 700;
+const PAGE_SLEEP_MS = 1500;
 const EMPTY_PAGE_THRESHOLD = 3;
 
 const BUILTIN_CLASS_NAMES = {
@@ -65,7 +65,7 @@ function pickPhotoFamily(photo) {
 }
 
 /**
- * 主入口：采集相册。downloader 实例由调用方提供。
+ * Main entry: collect photo albums. Downloader instance provided by caller.
  */
 async function collectPhotos({
   client,
@@ -103,7 +103,7 @@ async function collectPhotos({
     idcNum = 0;
   }
 
-  // 2) 分页拉相册列表
+  // 2) Paginate album list
   const albumOutFile = path.join(outputRoot, 'data', 'photos', 'albums.json');
   let albums = [];
   let totalAlbums = 0;
@@ -178,7 +178,7 @@ async function collectPhotos({
       logger.info(`[photos] album page ${page}: +${list.length} => total ${albums.length}/${totalAlbums || '?'}`);
       if (totalAlbums && albums.length >= totalAlbums) break;
     }
-    await sleep(PAGE_SLEEP_MS);
+    await randomSleep(PAGE_SLEEP_MS);
   }
 
   // 3) Fetch photo list for each album + enqueue downloads
@@ -271,7 +271,7 @@ async function collectPhotos({
           break;
         }
       }
-      await sleep(PAGE_SLEEP_MS);
+      await randomSleep(PAGE_SLEEP_MS);
     }
     if (photoLimitPerAlbum > 0 && photoList.length > photoLimitPerAlbum) {
       photoList.length = photoLimitPerAlbum;

@@ -43,6 +43,7 @@ const utilNavItems = [
 export function Layout() {
   useKeyboardNav();
   const { data: user } = useData<UserInfo>('./data/user.json');
+  const { data: albums } = useData<{ total?: number }[]>('./data/photos/albums.json');
   const mainRef = useRef<HTMLElement>(null);
   const location = useLocation();
   const scrollPositions = useRef<Record<string, number>>({});
@@ -68,6 +69,9 @@ export function Layout() {
 
   const getCount = (countKey: string | null): number | undefined => {
     if (!countKey || !user) return undefined;
+    if (countKey === 'photos' && albums) {
+      return albums.reduce((sum, a) => sum + (a.total || 0), 0) || undefined;
+    }
     const obj = user as Record<string, unknown>;
     return (obj[`${countKey}_count`] as number | undefined) ?? (obj[countKey] as number | undefined) ?? undefined;
   };
@@ -79,11 +83,12 @@ export function Layout() {
         <div className="p-4 border-b border-[hsl(var(--border))]">
           <div className="flex items-center gap-3">
             <QQLink uin={user?.uin} className="shrink-0">
-              {user?.avatar ? (
-                <img src={user.avatar} alt="" className="w-10 h-10 rounded-full object-cover ring-1 ring-[hsl(var(--border))] hover:ring-2 transition" />
-              ) : (
-                <div className="w-10 h-10 rounded-full bg-[hsl(var(--muted))] flex items-center justify-center text-sm">👤</div>
-              )}
+              <img
+                src={user?.uin ? `./media/avatars/${user.uin}_qz.jpg` : ''}
+                alt=""
+                className="w-10 h-10 rounded-full object-cover ring-1 ring-[hsl(var(--border))] hover:ring-2 transition"
+                onError={(e) => { const el = e.target as HTMLImageElement; if (!el.dataset.fallback) { el.dataset.fallback = '1'; el.src = user?.uin ? `./media/avatars/${user!.uin}.jpg` : ''; } else { el.style.display = 'none'; } }}
+              />
             </QQLink>
             <div className="flex-1 min-w-0">
               <QQLink uin={user?.uin} className="text-sm font-semibold text-[hsl(var(--foreground))] truncate block">

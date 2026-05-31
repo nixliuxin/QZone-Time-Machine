@@ -39,11 +39,12 @@ export function Dashboard() {
     <div className="p-6 max-w-4xl mx-auto">
       <header className="flex items-center gap-4 mb-8">
         <QQLink uin={user?.uin} className="shrink-0">
-          {user?.avatar ? (
-            <img src={user.avatar} alt="" className="w-16 h-16 rounded-full object-cover ring-2 ring-[hsl(var(--border))] hover:ring-4 transition" />
-          ) : (
-            <div className="w-16 h-16 rounded-full bg-[hsl(var(--muted))] flex items-center justify-center text-2xl">👤</div>
-          )}
+          <img
+            src={user?.uin ? `./media/avatars/${user.uin}.jpg` : ''}
+            alt=""
+            className="w-16 h-16 rounded-full object-cover ring-2 ring-[hsl(var(--border))] hover:ring-4 transition"
+            onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
+          />
         </QQLink>
         <div>
           <QQLink uin={user?.uin} className="text-2xl font-semibold text-[hsl(var(--foreground))]">

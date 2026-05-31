@@ -6,12 +6,12 @@
 
 const path = require('path');
 const fs = require('fs');
-const { writeData, readData } = require('./_util.js');
+const { writeData, readData, randomSleep } = require('./_util.js');
 const diariesApi = require('../api/diaries.js');
-const { sleep, NoAccessError, AuthInvalidError } = require('../client.js');
+const { NoAccessError, AuthInvalidError } = require('../client.js');
 
 const EMPTY_PAGE_THRESHOLD = 3;
-const PAGE_SLEEP_MS = 600;
+const PAGE_SLEEP_MS = 1500;
 
 async function collectDiaries({
   client,
@@ -81,7 +81,7 @@ async function collectDiaries({
       logger.info(`[diaries] page ${page}: +${list.length} => total ${all.length}/${totalReported || '?'}`);
       if (totalReported && all.length >= totalReported) break;
     }
-    await sleep(PAGE_SLEEP_MS);
+    await randomSleep(PAGE_SLEEP_MS);
   }
 
   if (withDetail) {
@@ -91,7 +91,7 @@ async function collectDiaries({
         const { html } = await diariesApi.getDiaryInfoHtml({ client, blogid: d.blogid });
         d.custom_html = html;
       } catch (e) {}
-      if (i % 10 === 9) await sleep(300);
+      if (i % 10 === 9) await randomSleep(800);
     }
   }
 

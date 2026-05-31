@@ -1,4 +1,3 @@
-import { useMemo } from 'react';
 import { useData } from '../hooks/useData';
 import { usePagination } from '../hooks/usePagination';
 import { CommentList } from '../components/CommentList';
@@ -27,16 +26,12 @@ interface BoardMessage {
   custom_html?: string;
   pubtime?: string;
   custom_create_time?: string;
+  signature?: string;
   replyList?: Reply[];
   custom_replies?: Reply[];
   custom_images?: { custom_filepath?: string; url?: string }[];
 }
 
-interface Friend {
-  uin: number;
-  img?: string;
-  avatar?: string;
-}
 
 function decodeBase64(str: string): string {
   let html: string;
@@ -52,20 +47,8 @@ function decodeBase64(str: string): string {
 
 export function Boards() {
   const { data: raw, loading, error } = useData<BoardMessage[] | { items: BoardMessage[] }>('./data/boards.json');
-  const { data: friends } = useData<Friend[]>('./data/friends.json');
   const boards = raw ? (Array.isArray(raw) ? raw : raw.items ?? []) : [];
   const { paged, currentPage, totalPages, total: boardTotal, setPage, pageSize } = usePagination(boards);
-
-  const avatarMap = useMemo(() => {
-    const map = new Map<number, string>();
-    if (friends) {
-      for (const f of friends) {
-        const url = f.avatar || f.img;
-        if (url) map.set(f.uin, url);
-      }
-    }
-    return map;
-  }, [friends]);
 
   if (loading) return <div className="p-6 text-[hsl(var(--muted-foreground))]">加载中...</div>;
   if (error) return <div className="p-6 text-[hsl(var(--destructive))]">加载失败: {error}</div>;
@@ -83,21 +66,22 @@ export function Boards() {
           const contentHtml = html || formatQQContent(plainContent);
           const time = msg.custom_create_time || msg.pubtime || '';
           const images = msg.custom_images || [];
-          const avatar = msg.uin ? avatarMap.get(msg.uin) : undefined;
-
           return (
             <article key={msg.id || i} className="rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-4 shadow-sm">
               <div className="flex items-center gap-3 mb-2">
                 <QQLink uin={msg.uin} className="shrink-0">
-                  {avatar ? (
-                    <img src={avatar} alt="" className="w-8 h-8 rounded-full object-cover hover:ring-2 ring-[hsl(var(--border))] transition" loading="lazy" />
+                  {msg.uin ? (
+                    <img src={`./media/avatars/${msg.uin}.jpg`} alt="" className="w-8 h-8 rounded-full object-cover hover:ring-2 ring-[hsl(var(--border))] transition" loading="lazy" onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }} />
                   ) : (
                     <div className="w-8 h-8 rounded-full bg-[hsl(var(--muted))] flex items-center justify-center text-xs">👤</div>
                   )}
                 </QQLink>
                 <div>
-                  <QQLink uin={msg.uin} className="font-medium text-sm text-[hsl(var(--foreground))]">{msg.nickname || msg.nick || `QQ ${msg.uin}`}</QQLink>
+                  <QQLink uin={msg.uin} className="font-medium text-sm text-[hsl(var(--foreground))] [&_.qq-emoji]:inline-block [&_.qq-emoji]:w-4 [&_.qq-emoji]:h-4 [&_.qq-emoji]:align-text-bottom">
+                    <span dangerouslySetInnerHTML={{ __html: formatQQContent(msg.nickname || msg.nick || `QQ ${msg.uin}`) }} />
+                  </QQLink>
                   {time && <time className="ml-2 text-xs text-[hsl(var(--muted-foreground))]">{time}</time>}
+                  {msg.signature && <p className="text-xs text-[hsl(var(--muted-foreground))] italic mt-0.5">{msg.signature}</p>}
                 </div>
               </div>
 

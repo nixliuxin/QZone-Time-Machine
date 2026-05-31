@@ -48,6 +48,8 @@ interface Message {
   cmtnum?: number;
   commenttotal?: number;
   likenum?: number;
+  likeTotal?: number;
+  likes?: { nick?: string; uin?: number }[];
   fwdnum?: number;
   rt_sum?: number;
   name?: string;
@@ -176,7 +178,7 @@ function MessageCard({ message }: { message: Message }) {
         {location && <span>📍 {location}</span>}
         {message.source_name && <span className="opacity-70">{message.source_name}</span>}
         {(message.fwdnum ?? message.rt_sum ?? 0) > 0 && <span>🔁 {message.fwdnum || message.rt_sum}</span>}
-        {(message.likenum ?? 0) > 0 && <span>👍 {message.likenum}</span>}
+        {(message.likenum || message.likeTotal || 0) > 0 && <span>👍 {message.likenum || message.likeTotal}</span>}
         {commentCount > 0 && (
           <button
             onClick={() => setShowComments(!showComments)}

@@ -6,7 +6,7 @@
 const path = require('path');
 const { writeData, readData } = require('./_util.js');
 const commonApi = require('../api/common.js');
-const { NoAccessError } = require('../client.js');
+const { NoAccessError, AuthInvalidError } = require('../client.js');
 
 /**
  * @returns {{status, info}}
@@ -19,6 +19,7 @@ async function collectUserInfo({ client, targetUin, outputRoot, logger = console
     if (json && json.data) Object.assign(info, json.data);
     if (json && json.nickname) info.nickname = json.nickname;
   } catch (err) {
+    if (err instanceof AuthInvalidError) throw err;
     if (err instanceof NoAccessError) {
       logger.warn(`[common] getUserInfo no access: ${err.message}`);
       return { status: 'no_access', info };
@@ -32,7 +33,9 @@ async function collectUserInfo({ client, targetUin, outputRoot, logger = console
       info.name = info.name || info.nickname;
       info.avatar = info.avatar || card.data.face || card.data.avatar;
     }
-  } catch (_) {}
+  } catch (e) {
+    if (e instanceof AuthInvalidError) throw e;
+  }
   if (!info.name) info.name = info.nickname || `User_${targetUin}`;
   if (!info.nickname) info.nickname = info.name;
 

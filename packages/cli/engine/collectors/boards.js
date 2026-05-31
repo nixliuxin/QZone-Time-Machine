@@ -6,12 +6,12 @@
 
 const path = require('path');
 const fs = require('fs');
-const { writeData, readData } = require('./_util.js');
+const { writeData, readData, randomSleep } = require('./_util.js');
 const boardsApi = require('../api/boards.js');
-const { sleep, NoAccessError, AuthInvalidError, RateLimitError } = require('../client.js');
+const { NoAccessError, AuthInvalidError, RateLimitError } = require('../client.js');
 
 const EMPTY_PAGE_THRESHOLD = 3;
-const PAGE_SLEEP_MS = 500;
+const PAGE_SLEEP_MS = 1500;
 
 async function collectBoards({
   client,
@@ -84,7 +84,7 @@ async function collectBoards({
       logger.info(`[boards] page ${page}: +${list.length} => total ${all.length}/${totalReported || '?'}`);
       if (totalReported && all.length >= totalReported) break;
     }
-    await sleep(PAGE_SLEEP_MS);
+    await randomSleep(PAGE_SLEEP_MS);
   }
 
   writeData(outFile, { items: all, total: totalReported });

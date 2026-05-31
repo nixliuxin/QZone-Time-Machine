@@ -29,7 +29,7 @@ async function getRoute({ client, targetUin }) {
     },
     { tag: 'photos.getRoute', allowEmpty: true, retries: 2, jsonpKey: /^photoDomainNameCallback\(/ }
   );
-  // 取一个 domain_n 字段对应的 idcnum；找不到默认 0
+  // Extract idcnum from domain_n field; default to 0 if not found
   const data = json && (json.data || json) || {};
   for (const k of Object.keys(data)) {
     if (/^domain_\d$/.test(k)) {

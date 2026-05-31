@@ -6,12 +6,12 @@
 
 const path = require('path');
 const fs = require('fs');
-const { writeData, readData } = require('./_util.js');
+const { writeData, readData, randomSleep } = require('./_util.js');
 const favoritesApi = require('../api/favorites.js');
-const { sleep, NoAccessError, AuthInvalidError } = require('../client.js');
+const { NoAccessError, AuthInvalidError } = require('../client.js');
 
 const EMPTY_PAGE_THRESHOLD = 3;
-const PAGE_SLEEP_MS = 600;
+const PAGE_SLEEP_MS = 1500;
 
 async function collectFavorites({
   client,
@@ -79,7 +79,7 @@ async function collectFavorites({
       logger.info(`[favorites] page ${page}: +${list.length} => total ${all.length}/${totalReported || '?'}`);
       if (totalReported && all.length >= totalReported) break;
     }
-    await sleep(PAGE_SLEEP_MS);
+    await randomSleep(PAGE_SLEEP_MS);
   }
 
   writeData(outFile, all);

@@ -280,17 +280,32 @@ async function login(opts = {}) {
 /**
  * Puppeteer login: launch real Chromium, navigate to QZone login page,
  * extract cookies after user scans the QR code.
+ *
+ * Uses puppeteer-extra with stealth plugin to avoid automation detection.
  */
 async function loginWithPuppeteer(opts, onStatus) {
-  const puppeteer = require('puppeteer');
+  let puppeteer;
+  try {
+    puppeteer = require('puppeteer-extra');
+    const StealthPlugin = require('puppeteer-extra-plugin-stealth');
+    puppeteer.use(StealthPlugin());
+    onStatus({ stage: 'debug', msg: 'Using puppeteer-extra with stealth plugin' });
+  } catch {
+    puppeteer = require('puppeteer');
+    onStatus({ stage: 'debug', msg: 'Stealth plugin not available, using vanilla puppeteer' });
+  }
   const qrPath = path.resolve(opts.qrPath || path.join(process.cwd(), 'qrcode.png'));
   const timeoutMs = opts.timeoutMs ?? 5 * 60 * 1000;
 
   onStatus({ stage: 'browser', msg: 'Launching browser...' });
   const browser = await puppeteer.launch({
     headless: false,
-    args: ['--no-sandbox', '--disable-setuid-sandbox'],
-    defaultViewport: { width: 500, height: 600 },
+    args: [
+      '--no-sandbox',
+      '--disable-setuid-sandbox',
+      '--disable-blink-features=AutomationControlled',
+    ],
+    defaultViewport: { width: 1280, height: 800 },
   });
 
   try {

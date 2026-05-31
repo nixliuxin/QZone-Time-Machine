@@ -76,9 +76,69 @@ program
     session.applyCookies(cookies);
     if (uin && session.uin !== uin) session.uin = uin;
     session.save();
+    session.saveCreatedAt(dataDir);
 
     console.log(`Login successful! uin=${session.uin}`);
     console.log(`Cookies saved to: ${cookiesFile}`);
+  });
+
+// ─── import-cookies ───
+
+program
+  .command('import-cookies')
+  .description('Import cookies from browser (paste cookie string from DevTools)')
+  .option('-d, --data-dir <dir>', 'Directory to store cookies.json / auth.json', '.')
+  .option('-f, --file <path>', 'Read cookie string from a text file instead of stdin')
+  .action(async (opts) => {
+    const dataDir = resolve(opts.dataDir);
+    if (!existsSync(dataDir)) mkdirSync(dataDir, { recursive: true });
+
+    const cookiesFile = join(dataDir, 'cookies.json');
+    const authFile = join(dataDir, 'auth.json');
+
+    let cookieStr = '';
+    if (opts.file) {
+      cookieStr = readFileSync(resolve(opts.file), 'utf-8').trim();
+    } else {
+      const readline = await import('node:readline');
+      const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+      cookieStr = await new Promise<string>((res) => {
+        console.log('Paste your cookie string from browser DevTools (F12 → Network → Request Headers → Cookie):');
+        rl.question('> ', (answer) => { rl.close(); res(answer.trim()); });
+      });
+    }
+
+    if (!cookieStr) {
+      console.error('Empty cookie string. Aborting.');
+      process.exit(1);
+    }
+
+    const cookies = cookieStr.split(';').map((pair) => {
+      const eq = pair.indexOf('=');
+      if (eq < 0) return null;
+      const name = pair.slice(0, eq).trim();
+      const value = pair.slice(eq + 1).trim();
+      if (!name) return null;
+      return { name, value, domain: '.qq.com', path: '/', expires: -1, httpOnly: false, secure: false, session: true };
+    }).filter(Boolean);
+
+    if (cookies.length === 0) {
+      console.error('No valid cookies parsed. Aborting.');
+      process.exit(1);
+    }
+
+    const session = new Session({ cookiesFile, authFile });
+    session.applyCookies(cookies);
+    session.save();
+    session.saveCreatedAt(dataDir);
+
+    if (!session.uin || !session.gtk) {
+      console.error('Warning: could not extract uin or g_tk from cookies.');
+      console.error('Make sure you copied the full cookie string from a logged-in QZone page.');
+    } else {
+      console.log(`Import successful! uin=${session.uin}, g_tk=${session.gtk}`);
+    }
+    console.log(`Cookies saved to: ${cookiesFile} (${cookies.length} cookies)`);
   });
 
 // ─── backup (single user) ───
@@ -115,7 +175,7 @@ program
       process.exit(1);
     }
 
-    const client = new QzoneClient({ session });
+    const client = new QzoneClient({ session, config: { dataDir } });
     const logger = makeLogger(`uin=${targetUin}`);
     const download = opts.download !== false;
     const doPhotos = opts.photos !== false;
@@ -141,6 +201,11 @@ program
     const counts: Record<string, number> = {};
 
     const runModule = async (label: string, fn: () => Promise<any>) => {
+      const mod = progress.module(label);
+      if (mod.status === 'done') {
+        logger.info(`--- ${label} --- (already done, skipping)`);
+        return { status: 'done', total: mod.totalReported, fetched: mod.fetched, items: [] };
+      }
       logger.info(`--- ${label} ---`);
       try {
         const r = await fn();
@@ -268,6 +333,31 @@ program
           await enrichers.enrichBlogComments({ client, targetUin, items: b.items, logger });
           writeData(join(userDir, 'data', 'blogs.json'), b.items);
         }
+        // Enrich album photo comments from disk
+        const photosDir = join(userDir, 'data', 'photos');
+        if (existsSync(photosDir)) {
+          const { readdirSync } = await import('node:fs');
+          const albumFiles = readdirSync(photosDir).filter((f: string) => f.endsWith('.json'));
+          for (const af of albumFiles) {
+            const afPath = join(photosDir, af);
+            try {
+              const raw = JSON.parse(readFileSync(afPath, 'utf-8'));
+              const photos = Array.isArray(raw) ? raw : raw.photoList || [];
+              if (!photos.length) continue;
+              const albumId = photos[0]?.albumId || af.replace('.json', '');
+              const touched = await enrichers.enrichAlbumPhotoComments({
+                client, targetUin,
+                albums: [{ id: albumId, photoList: photos }],
+                logger,
+              });
+              if (touched > 0) {
+                writeData(afPath, photos);
+              }
+            } catch (e: any) {
+              logger.warn(`[enrich] album ${af} error: ${e.message}`);
+            }
+          }
+        }
       }
 
       if (opts.enrichLikes) {
@@ -377,7 +467,71 @@ program
       };
       writeFileSync(join(userDir, 'meta.json'), JSON.stringify(meta, null, 2), 'utf8');
 
-      // 18) Embed viewer (unless --no-convert)
+      // 18) Download avatars
+      {
+        logger.info('--- download avatars ---');
+        const avatarDir = join(userDir, 'media', 'avatars');
+        if (!existsSync(avatarDir)) mkdirSync(avatarDir, { recursive: true });
+
+        const uins = new Set<string>();
+        uins.add(String(targetUin));
+
+        const dataDir = join(userDir, 'data');
+        const tryCollectUins = (file: string, extractor: (items: any[]) => string[]) => {
+          const p = join(dataDir, file);
+          if (!existsSync(p)) return;
+          try {
+            const raw = JSON.parse(readFileSync(p, 'utf-8'));
+            const items = Array.isArray(raw) ? raw : raw.items || [];
+            for (const u of extractor(items)) { if (u) uins.add(String(u)); }
+          } catch {}
+        };
+
+        tryCollectUins('friends.json', (items) => items.map(f => f.uin));
+        tryCollectUins('visitors.json', (items) => items.map(v => v.uin));
+        tryCollectUins('boards.json', (items) => items.map(b => b.uin));
+
+        const https = await import('node:https');
+        const http = await import('node:http');
+        const fetchAvatar = (url: string, dest: string): Promise<boolean> => {
+          if (existsSync(dest)) return Promise.resolve(true);
+          return new Promise((resolve) => {
+            const mod = url.startsWith('https') ? https : http;
+            const req = mod.get(url, { timeout: 10000 }, (res: any) => {
+              if (res.statusCode === 301 || res.statusCode === 302) {
+                const loc = res.headers.location;
+                if (loc) { fetchAvatar(loc, dest).then(resolve); return; }
+              }
+              if (res.statusCode !== 200) { res.resume(); resolve(false); return; }
+              const { createWriteStream } = require('node:fs');
+              const ws = createWriteStream(dest);
+              res.pipe(ws);
+              ws.on('finish', () => resolve(true));
+              ws.on('error', () => resolve(false));
+            });
+            req.on('error', () => resolve(false));
+            req.on('timeout', () => { req.destroy(); resolve(false); });
+          });
+        };
+
+        // Download owner QZone avatar
+        await fetchAvatar(`https://q.qlogo.cn/g?b=qz&nk=${targetUin}&s=640`, join(avatarDir, `${targetUin}_qz.jpg`));
+
+        // Download QQ avatars for all collected UINs
+        let dlCount = 0;
+        const uinArr = [...uins];
+        const BATCH = 8;
+        for (let i = 0; i < uinArr.length; i += BATCH) {
+          const batch = uinArr.slice(i, i + BATCH);
+          const results = await Promise.all(batch.map(u =>
+            fetchAvatar(`https://q.qlogo.cn/headimg_dl?dst_uin=${u}&spec=640`, join(avatarDir, `${u}.jpg`))
+          ));
+          dlCount += results.filter(Boolean).length;
+        }
+        logger.info(`[avatars] downloaded: ${dlCount}/${uins.size} avatars`);
+      }
+
+      // 19) Embed viewer (unless --no-convert)
       if (doConvert) {
         logger.info('--- embed viewer ---');
         try {
@@ -407,9 +561,13 @@ program
   .description('Batch backup all accessible friends')
   .option('-d, --data-dir <dir>', 'Auth data directory', '.')
   .option('-o, --output <dir>', 'Output root directory', './output')
-  .option('--delay <ms>', 'Delay between users (ms)', '15000')
+  .option('--delay <ms>', 'Base delay between users (ms)', '30000')
+  .option('--daily-limit <n>', 'Max users to process per run (0=unlimited)', '50')
   .option('--no-download', 'Skip media downloads')
   .option('--no-convert', 'Skip conversion to viewer format')
+  .option('--enrich-comments', 'Fetch full comment threads')
+  .option('--enrich-likes', 'Fetch like details')
+  .option('--skip <uins>', 'Comma-separated UINs to skip')
   .option('--sample <pages>', 'Sample mode: limit pages per module', '0')
   .action(async (opts) => {
     const dataDir = resolve(opts.dataDir);
@@ -419,50 +577,93 @@ program
     const session = new Session({ cookiesFile, authFile });
     session.load();
     if (!session.looksValid()) {
-      console.error('Session expired. Please run "qzone-tools login" first.');
+      console.error('Session expired. Please run "qzone-tools login" or "qzone-tools import-cookies" first.');
       process.exit(1);
     }
 
-    const client = new QzoneClient({ session });
+    // Proactive session age check
+    const remaining = session.estimatedRemainingMs(dataDir);
+    if (remaining <= 0) {
+      console.error('Session expired (age > 20h). Please re-login.');
+      process.exit(1);
+    }
+    if (remaining < 2 * 60 * 60 * 1000) {
+      console.warn(`Warning: session expires in ~${Math.round(remaining / 60000)} minutes.`);
+    }
+
+    const client = new QzoneClient({ session, config: { dataDir } });
     const logger = makeLogger('batch');
     const { getFriends } = require('../engine/api/friends.js');
+
+    const skipSet = new Set((opts.skip || '').split(',').map((s: string) => s.trim()).filter(Boolean));
+    const dailyLimit = parseInt(opts.dailyLimit, 10) || 0;
 
     logger.info('Fetching friends list...');
     const friendsJson = await getFriends({ client, targetUin: session.uin });
     const items = friendsJson?.data?.items || friendsJson?.items || [];
-    logger.info(`Found ${items.length} friends`);
+    logger.info(`Found ${items.length} friends (skipping ${skipSet.size})`);
+    if (dailyLimit > 0) {
+      logger.info(`Daily limit: ${dailyLimit} users per run`);
+    }
 
-    const delay = parseInt(opts.delay, 10) || 15000;
+    const delay = parseInt(opts.delay, 10) || 30000;
+    let processedCount = 0;
 
     for (let i = 0; i < items.length; i++) {
+      // Check daily limit
+      if (dailyLimit > 0 && processedCount >= dailyLimit) {
+        logger.info(`Daily limit reached (${dailyLimit} users). Stopping. Resume next run.`);
+        break;
+      }
+
+      // Re-check session age periodically
+      const sessRemaining = session.estimatedRemainingMs(dataDir);
+      if (sessRemaining <= 10 * 60 * 1000) {
+        logger.warn(`Session expires in ~${Math.round(sessRemaining / 60000)} min. Stopping to avoid wasted requests.`);
+        break;
+      }
+
       const friend = items[i];
       const uin = friend.uin || friend.fuin;
       const name = friend.name || friend.remark || `User_${uin}`;
+
+      if (skipSet.has(String(uin))) {
+        logger.info(`[${i + 1}/${items.length}] SKIP ${uin} (${name})`);
+        continue;
+      }
+
       logger.info(`[${i + 1}/${items.length}] Backing up ${uin} (${name})`);
 
-      // Spawn backup as child process reusing same session
-      const { execFileSync } = require('child_process');
+      const { execSync } = require('child_process');
       const thisScript = process.argv[1];
-      const args = ['backup', String(uin), '-d', dataDir, '-o', opts.output, '-n', name];
+      const args = ['backup', String(uin), '-d', dataDir, '-o', opts.output, '-n', `"${name}"`];
       if (!opts.download) args.push('--no-download');
       if (!opts.convert) args.push('--no-convert');
+      if (opts.enrichComments) args.push('--enrich-comments');
+      if (opts.enrichLikes) args.push('--enrich-likes');
       if (opts.sample !== '0') args.push('--sample', opts.sample);
 
+      const t0 = Date.now();
       try {
-        execFileSync(process.execPath, [thisScript, ...args], { stdio: 'inherit' });
+        const projRoot = resolve(fileURLToPath(import.meta.url), '../../..');
+        const cmd = `npx tsx "${thisScript}" ${args.join(' ')}`;
+        execSync(cmd, { stdio: 'inherit', cwd: projRoot });
       } catch (e: any) {
         logger.error(`Failed to backup ${uin}: ${e.message}`);
       }
 
-      if (i < items.length - 1) {
-        const jitter = Math.random() * delay * 0.5;
-        const wait = delay + jitter;
-        logger.info(`Waiting ${Math.round(wait / 1000)}s before next user...`);
+      processedCount++;
+      const elapsed = Date.now() - t0;
+      if (i < items.length - 1 && elapsed > 5000) {
+        // Randomized inter-user delay: base ± 50%, with extra jitter
+        const jitter = delay * (0.5 + Math.random());
+        const wait = Math.round(jitter);
+        logger.info(`[${processedCount}/${dailyLimit || '∞'}] Waiting ${Math.round(wait / 1000)}s before next user...`);
         await new Promise(r => setTimeout(r, wait));
       }
     }
 
-    logger.info(`Batch complete: ${items.length} users processed`);
+    logger.info(`Batch complete: ${processedCount} users processed in this run`);
   });
 
 // ─── convert (legacy format → viewer format) ───

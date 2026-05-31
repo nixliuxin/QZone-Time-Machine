@@ -76,6 +76,7 @@ export function Lightbox({ items, startIndex = 0, onClose }: LightboxProps) {
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
+      e.stopPropagation();
       if (e.key === 'Escape') onClose();
       else if (e.key === 'ArrowLeft') goPrev();
       else if (e.key === 'ArrowRight') goNext();
@@ -101,6 +102,7 @@ export function Lightbox({ items, startIndex = 0, onClose }: LightboxProps) {
 
   return createPortal(
     <div
+      data-lightbox
       className="fixed inset-0 z-[9999] flex flex-col bg-black/90 animate-fade-in"
       onClick={onClose}
     >

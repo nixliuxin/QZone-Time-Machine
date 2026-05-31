@@ -74,22 +74,25 @@ export function DataReport() {
   const { data: blogs } = useData<unknown[]>('./data/blogs.json');
   const { data: albums } = useData<{ total?: number }[]>('./data/photos/albums.json');
   const { data: videos } = useData<unknown[]>('./data/videos.json');
-  const { data: boards } = useData<unknown[]>('./data/boards.json');
+  const { data: boardsRaw } = useData<unknown[] | { items?: unknown[] }>('./data/boards.json');
   const { data: friends } = useData<unknown[]>('./data/friends.json');
   const { data: diaries } = useData<unknown[]>('./data/diaries.json');
-  const { data: visitors } = useData<unknown[]>('./data/visitors.json');
+  const { data: visitorsRaw } = useData<unknown[] | { items?: unknown[] }>('./data/visitors.json');
   const { data: favorites } = useData<unknown[]>('./data/favorites.json');
   const { data: shares } = useData<unknown[]>('./data/shares.json');
+
+  const toArray = (d: unknown[] | { items?: unknown[] } | null) =>
+    d ? (Array.isArray(d) ? d : d.items ?? []) : [];
 
   const actualCounts: Record<string, number> = {
     messages: messages?.length ?? 0,
     blogs: blogs?.length ?? 0,
     photos: albums?.reduce((sum, a) => sum + (a.total || 0), 0) ?? 0,
     videos: videos?.length ?? 0,
-    boards: boards?.length ?? 0,
+    boards: toArray(boardsRaw).length,
     friends: friends?.length ?? 0,
     diaries: diaries?.length ?? 0,
-    visitors: visitors?.length ?? 0,
+    visitors: toArray(visitorsRaw).length,
     favorites: favorites?.length ?? 0,
     shares: shares?.length ?? 0,
   };
@@ -161,7 +164,7 @@ export function DataReport() {
       </div>
 
       <p className="mt-4 text-xs text-[hsl(var(--muted-foreground))] text-center">
-        快捷键：← → 翻页 · J/K 滚动 · Esc 返回
+        快捷键：← → 翻页 · Esc 返回
       </p>
     </div>
   );

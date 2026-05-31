@@ -120,6 +120,38 @@ class Session {
   }
 
   /**
+   * Persist the session creation timestamp so we can proactively detect expiry.
+   */
+  saveCreatedAt(dataDir) {
+    const metaFile = path.join(dataDir || path.dirname(this.cookiesFile), 'session_meta.json');
+    const meta = { createdAt: new Date().toISOString(), createdAtMs: Date.now() };
+    fs.writeFileSync(metaFile, JSON.stringify(meta, null, 2), 'utf8');
+  }
+
+  /**
+   * Returns session age in milliseconds, or -1 if unknown.
+   */
+  getAgeMs(dataDir) {
+    const metaFile = path.join(dataDir || path.dirname(this.cookiesFile), 'session_meta.json');
+    if (!fs.existsSync(metaFile)) return -1;
+    try {
+      const meta = JSON.parse(fs.readFileSync(metaFile, 'utf8'));
+      return Date.now() - (meta.createdAtMs || Date.parse(meta.createdAt));
+    } catch { return -1; }
+  }
+
+  /**
+   * Returns estimated remaining session life in ms.
+   * QZone p_skey typically expires in ~24h; we use a conservative 20h window.
+   */
+  estimatedRemainingMs(dataDir) {
+    const age = this.getAgeMs(dataDir);
+    if (age < 0) return Infinity;
+    const MAX_LIFE_MS = 20 * 60 * 60 * 1000; // 20 hours
+    return Math.max(0, MAX_LIFE_MS - age);
+  }
+
+  /**
    * Whether the session looks valid (local heuristic only; actual validation happens at request time).
    */
   looksValid() {

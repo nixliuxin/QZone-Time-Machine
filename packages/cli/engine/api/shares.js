@@ -38,15 +38,15 @@ function parseSharesHtml(html) {
   while ((m = re.exec(html)) !== null) {
     const raw = m[1];
     try {
-      // shareInfos 内是合法 JSON-like，但通常 key 不带引号；用宽松解析：
-      // 优先尝试 JSON.parse，失败再走 Function 求值（沙箱内）
+      // shareInfos contains JSON-like objects but keys are often unquoted;
+      // try JSON.parse first, fall back to Function eval (sandboxed)
       try {
         list.push(JSON.parse(raw));
       } catch (_) {
         const fn = new Function(`return (${raw});`);
         list.push(fn());
       }
-    } catch (_) { /* 单条解析失败，跳过 */ }
+    } catch (_) { /* skip unparseable entry */ }
   }
   let total = 0;
   const t = /([\d,]+)\s*条分享/.exec(html);

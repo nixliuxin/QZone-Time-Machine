@@ -6,9 +6,9 @@
 
 const path = require('path');
 const fs = require('fs');
-const { writeData, readData } = require('./_util.js');
+const { writeData, readData, randomSleep } = require('./_util.js');
 const blogsApi = require('../api/blogs.js');
-const { sleep, NoAccessError, AuthInvalidError } = require('../client.js');
+const { NoAccessError, AuthInvalidError } = require('../client.js');
 
 function extractNestedDiv(html, startIdx) {
   let depth = 0;
@@ -72,7 +72,7 @@ function parseBlogDetail(html) {
 }
 
 const EMPTY_PAGE_THRESHOLD = 3;
-const PAGE_SLEEP_MS = 600;
+const PAGE_SLEEP_MS = 1500;
 
 async function collectBlogs({
   client,
@@ -140,7 +140,7 @@ async function collectBlogs({
       logger.info(`[blogs] page ${page}: +${list.length} => total ${all.length}/${totalReported || '?'}`);
       if (totalReported && all.length >= totalReported) break;
     }
-    await sleep(PAGE_SLEEP_MS);
+    await randomSleep(PAGE_SLEEP_MS);
   }
 
   if (withDetail && all.length) {
@@ -161,10 +161,37 @@ async function collectBlogs({
       if (detailDone % 5 === 0) {
         writeData(outFile, all);
         logger.info(`[blogs] detail ${detailDone}/${all.length}`);
-        await sleep(400);
+        await randomSleep(1200);
       }
     }
     logger.info(`[blogs] detail fetch complete ${detailDone}/${all.length}`);
+
+    // Fetch read counts (batch API, max 500 IDs per call)
+    const blogIds = all.map(b => b.blogId || b.blogid || b.id).filter(Boolean);
+    if (blogIds.length > 0) {
+      try {
+        const rcJson = await blogsApi.getReadCount({ client, targetUin, blogIds });
+        const rcData = rcJson && rcJson.data || {};
+        const itemList = Array.isArray(rcData.itemList) ? rcData.itemList : [];
+        if (itemList.length > 0) {
+          const readMap = new Map();
+          for (const item of itemList) {
+            if (item.id && item.read !== undefined) readMap.set(String(item.id), item.read);
+          }
+          let filled = 0;
+          for (const b of all) {
+            const id = String(b.blogId || b.blogid || b.id);
+            if (readMap.has(id)) {
+              b.readnum = readMap.get(id);
+              filled++;
+            }
+          }
+          logger.info(`[blogs] read counts: ${filled}/${all.length} blogs have readnum`);
+        }
+      } catch (e) {
+        logger.warn(`[blogs] read count fetch failed: ${e.message}`);
+      }
+    }
   }
 
   writeData(outFile, all);

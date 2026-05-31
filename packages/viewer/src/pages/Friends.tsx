@@ -63,8 +63,8 @@ function FriendCard({ friend: f }: { friend: Friend }) {
 
   return (
     <QQLink uin={f.uin} className="flex items-center gap-3 rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-3 shadow-sm hover:shadow-md transition no-underline">
-      {(f.avatar || f.img) ? (
-        <img src={f.avatar || f.img} alt="" className="w-10 h-10 rounded-full object-cover shrink-0" loading="lazy" />
+      {f.uin ? (
+        <img src={`./media/avatars/${f.uin}.jpg`} alt="" className="w-10 h-10 rounded-full object-cover shrink-0" loading="lazy" onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }} />
       ) : (
         <div className="w-10 h-10 rounded-full bg-[hsl(var(--muted))] shrink-0 flex items-center justify-center text-[hsl(var(--muted-foreground))] text-sm">👤</div>
       )}

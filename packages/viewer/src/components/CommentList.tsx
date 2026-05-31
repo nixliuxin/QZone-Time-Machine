@@ -48,7 +48,7 @@ function CommentItem({ comment, depth = 0 }: { comment: Comment; depth?: number 
 
   const replies = comment.replies || comment.list || [];
 
-  const avatarUrl = comment.uin ? `https://q.qlogo.cn/headimg_dl?dst_uin=${comment.uin}&spec=640` : '';
+  const avatarUrl = comment.uin ? `./media/avatars/${comment.uin}.jpg` : '';
 
   return (
     <div className={depth > 0 ? 'ml-4 pl-3 border-l border-[hsl(var(--border))]' : ''}>
@@ -65,7 +65,9 @@ function CommentItem({ comment, depth = 0 }: { comment: Comment; depth?: number 
         )}
         <div className="flex-1 min-w-0">
           <div className="text-xs">
-            <QQLink uin={comment.uin} className="font-medium text-[hsl(var(--foreground))]">{name}</QQLink>
+            <QQLink uin={comment.uin} className="font-medium text-[hsl(var(--foreground))] [&_.qq-emoji]:inline-block [&_.qq-emoji]:w-4 [&_.qq-emoji]:h-4 [&_.qq-emoji]:align-text-bottom">
+              <span dangerouslySetInnerHTML={{ __html: formatQQContent(name) }} />
+            </QQLink>
             {time && <span className="ml-2 text-[hsl(var(--muted-foreground))]">{time}</span>}
           </div>
           {contentHtml && (

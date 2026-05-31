@@ -142,6 +142,8 @@ class QzoneClient {
    *   - timeoutMs: per-request timeout
    *   - userAgent: custom UA string
    *   - logger: function(level, ...args)
+   *   - minRequestGapMs: global minimum gap between any two API requests (anti-ban)
+   *   - dataDir: session data directory (for session age checks)
    */
   constructor(opts) {
     if (!opts || !opts.session) throw new Error('QzoneClient requires a session');
@@ -154,11 +156,47 @@ class QzoneClient {
       timeoutMs: c.timeoutMs ?? 30000,
       userAgent: c.userAgent || DEFAULT_USER_AGENT,
       referer: c.referer || 'https://user.qzone.qq.com/',
+      minRequestGapMs: c.minRequestGapMs ?? 500,
+      dataDir: c.dataDir || null,
     };
     this.logger = opts.logger || ((lvl, ...args) => {
       const fn = console[lvl] || console.log;
       fn(`[client]`, ...args);
     });
+    this._lastRequestTime = 0;
+    this._totalRequests = 0;
+    this._sessionStartTime = Date.now();
+  }
+
+  /** Enforce a minimum gap between consecutive requests (global throttle). */
+  async _globalThrottle() {
+    const now = Date.now();
+    const elapsed = now - this._lastRequestTime;
+    const gap = this.config.minRequestGapMs;
+    if (elapsed < gap && this._lastRequestTime > 0) {
+      const jitter = Math.random() * gap * 0.4;
+      await sleep(gap - elapsed + jitter);
+    }
+    this._lastRequestTime = Date.now();
+    this._totalRequests++;
+  }
+
+  /** Check session age; throws if session is likely expired. */
+  checkSessionAge() {
+    if (!this.config.dataDir) return;
+    const remaining = this.session.estimatedRemainingMs(this.config.dataDir);
+    if (remaining <= 0) {
+      throw new AuthInvalidError(-1, 'Session expired (age > 20h). Please re-login.', null);
+    }
+    if (remaining < 30 * 60 * 1000) {
+      this.logger('warn', `Session expires in ~${Math.round(remaining / 60000)} minutes. Consider re-login soon.`);
+    }
+  }
+
+  /** Returns QPM (queries per minute) since client creation. */
+  getQpm() {
+    const mins = (Date.now() - this._sessionStartTime) / 60000;
+    return mins > 0 ? Math.round(this._totalRequests / mins) : 0;
   }
 
   /**
@@ -175,6 +213,7 @@ class QzoneClient {
    *   - responseType: 'text' (default) | 'arraybuffer'
    */
   async _requestOnce(url, params = {}, opts = {}) {
+    await this._globalThrottle();
     const method = (opts.method || 'GET').toUpperCase();
     const queryParams = { ...params };
     if (!opts.skipGtk && queryParams.g_tk == null) {
@@ -255,6 +294,7 @@ class QzoneClient {
    *   - tag: for logging only
    */
   async getJson(url, params = {}, opts = {}) {
+    this.checkSessionAge();
     const maxRetries = opts.retries ?? this.config.listRetryCount;
     let attempt = 0;
     let lastErr;

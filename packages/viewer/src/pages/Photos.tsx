@@ -1,6 +1,8 @@
+import { useState, useMemo } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import { useData } from '../hooks/useData';
 import { usePagination } from '../hooks/usePagination';
+import { Lightbox, type LightboxItem } from '../components/Lightbox';
 import { CommentList } from '../components/CommentList';
 import { Breadcrumb } from '../components/Breadcrumb';
 import { Pagination } from '../components/Pagination';
@@ -159,22 +161,38 @@ export function PhotoAlbumDetail() {
 
 function PhotoGrid({ photos, albumId }: { photos: Photo[]; albumId: string }) {
   const { paged: pagedPhotos, currentPage, totalPages, total: photoTotal, setPage, pageSize } = usePagination(photos, 60);
+  const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
 
   const pageOffset = (currentPage - 1) * pageSize;
+
+  const lightboxItems: LightboxItem[] = useMemo(() => photos.map((p) => ({
+    src: p.url || p.custom_filepath || p.custom_url || '',
+    meta: {
+      filename: p.custom_filename || p.name || '',
+      width: p.origin_width || p.width,
+      height: p.origin_height || p.height,
+      uploadtime: p.uploadtime,
+      shoottime: p.shoottime,
+      location: p.poiName,
+    },
+  })), [photos]);
 
   return (
     <>
       <div className="grid grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3">
         {pagedPhotos.map((photo, i) => (
-          <PhotoThumb key={pageOffset + i} photo={photo} albumId={albumId} index={pageOffset + i} />
+          <PhotoThumb key={pageOffset + i} photo={photo} albumId={albumId} index={pageOffset + i} onClick={() => setLightboxIndex(pageOffset + i)} />
         ))}
       </div>
       <Pagination currentPage={currentPage} totalPages={totalPages} total={photoTotal} pageSize={pageSize} onPageChange={setPage} />
+      {lightboxIndex !== null && (
+        <Lightbox items={lightboxItems} startIndex={lightboxIndex} onClose={() => setLightboxIndex(null)} />
+      )}
     </>
   );
 }
 
-function PhotoThumb({ photo, albumId, index }: { photo: Photo; albumId: string; index: number }) {
+function PhotoThumb({ photo, onClick }: { photo: Photo; albumId: string; index: number; onClick: () => void }) {
   const src = photo.url || photo.custom_filepath || photo.custom_url || '';
   if (!src) return null;
 
@@ -183,9 +201,9 @@ function PhotoThumb({ photo, albumId, index }: { photo: Photo; albumId: string; 
   const shootStr = formatDateShort(photo.shoottime);
 
   return (
-    <Link
-      to={`/photos/${albumId}/${index}`}
-      className="group relative rounded-lg overflow-hidden bg-[hsl(var(--muted))] border border-[hsl(var(--border))] hover:border-[hsl(var(--foreground)/0.3)] transition"
+    <div
+      onClick={onClick}
+      className="group relative rounded-lg overflow-hidden bg-[hsl(var(--muted))] border border-[hsl(var(--border))] hover:border-[hsl(var(--foreground)/0.3)] transition cursor-pointer"
     >
       <div className="aspect-square overflow-hidden">
         <img src={src} alt={name} className="w-full h-full object-cover" loading="lazy" />
@@ -209,7 +227,7 @@ function PhotoThumb({ photo, albumId, index }: { photo: Photo; albumId: string; 
           {photo.poiName && <div>📍 {photo.poiName}</div>}
         </div>
       </div>
-    </Link>
+    </div>
   );
 }
 

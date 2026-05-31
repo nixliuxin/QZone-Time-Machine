@@ -10,13 +10,13 @@
 'use strict';
 
 const path = require('path');
-const { writeData, readData } = require('./_util.js');
+const { writeData, readData, randomSleep } = require('./_util.js');
 const messagesApi = require('../api/messages.js');
-const { sleep, RateLimitError, EmptyDataError, NoAccessError, AuthInvalidError } =
+const { RateLimitError, EmptyDataError, NoAccessError, AuthInvalidError } =
   require('../client.js');
 
 const EMPTY_PAGE_THRESHOLD = 3;
-const PAGE_SLEEP_MS = 600;
+const PAGE_SLEEP_MS = 1500;
 
 /**
  * Main entry: collect messages (status updates).
@@ -91,7 +91,7 @@ async function collectMessages({
       logger.info(`[messages] page ${page}: +${list.length} => total ${all.length}/${totalReported || '?'}`);
       if (totalReported && all.length >= totalReported) break;
     }
-    await sleep(PAGE_SLEEP_MS);
+    await randomSleep(PAGE_SLEEP_MS);
   }
 
   writeData(outFile, all);

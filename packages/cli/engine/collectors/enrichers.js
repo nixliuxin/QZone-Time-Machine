@@ -15,9 +15,9 @@ const sharesApi = require('../api/shares.js');
 const videosApi = require('../api/videos.js');
 const likesApi = require('../api/likes.js');
 const visitorsApi = require('../api/visitors.js');
-const { sleep } = require('../client.js');
+const { randomSleep } = require('./_util.js');
 
-const PAGE_SLEEP_MS = 350;
+const PAGE_SLEEP_MS = 1200;
 
 /**
  * Generic paginated comment fetcher: calls fetcher(page) until
@@ -49,7 +49,7 @@ async function pullCommentsPaged({
     if (list.length === 0) break;
     merged.push(...list);
     if (totalReported && merged.length >= totalReported) break;
-    await sleep(PAGE_SLEEP_MS);
+    await randomSleep(PAGE_SLEEP_MS);
   }
   return { list: merged, total: totalReported || merged.length };
 }
@@ -227,7 +227,7 @@ async function enrichLikes({ client, items, buildKey, label = 'item', logger = c
     } catch (e) {
       // silently ignore failures
     }
-    if (touched % 20 === 0) await sleep(300);
+    if (touched % 20 === 0) await randomSleep(1000);
   }
   if (touched) logger.info(`[enrich] ${label} like enrichment: ${touched} items`);
   return touched;
@@ -262,13 +262,13 @@ async function enrichSingleVisitors({
       if (list.length === 0) break;
       collected.push(...list);
       if (data.totalNum && collected.length >= data.totalNum) break;
-      await sleep(250);
+      await randomSleep(1000);
     }
     if (collected.length) {
       it.custom_visitor = { list: collected, total: collected.length };
       touched++;
     }
-    if (touched % 20 === 0) await sleep(300);
+    if (touched % 20 === 0) await randomSleep(1000);
   }
   if (touched) logger.info(`[enrich] ${label} per-item visitor enrichment: ${touched} items`);
   return touched;

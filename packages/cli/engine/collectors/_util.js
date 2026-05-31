@@ -105,6 +105,15 @@ function preferOriginal(url) {
     .replace(/!\/m&/g, '!/b&');
 }
 
+/**
+ * Randomized sleep: actual duration is uniformly distributed in [ms * 0.6, ms * 1.4].
+ * Prevents fixed-interval patterns detectable by anti-scraping systems.
+ */
+function randomSleep(ms) {
+  const actual = Math.round(ms * (0.6 + Math.random() * 0.8));
+  return new Promise((resolve) => setTimeout(resolve, actual));
+}
+
 module.exports = {
   ensureDir,
   writeData,
@@ -114,4 +123,5 @@ module.exports = {
   shortHash,
   extFromUrl,
   preferOriginal,
+  randomSleep,
 };

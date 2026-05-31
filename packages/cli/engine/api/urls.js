@@ -60,7 +60,7 @@ const REST_URLS = {
   // Login (used by qr-login.js)
   PT_LOGIN_QRSHOW: 'https://ssl.ptlogin2.qq.com/ptqrshow',
   PT_LOGIN_QRLOGIN: 'https://ssl.ptlogin2.qq.com/ptqrlogin',
-  PT_LOGIN_CHECK_SIG: '', // 由 ptqrlogin 返回的 url 直接 GET
+  PT_LOGIN_CHECK_SIG: '', // URL returned by ptqrlogin, GET directly
   USER_QZONE_HOME: 'https://user.qzone.qq.com',
 };
 

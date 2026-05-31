@@ -34,7 +34,7 @@ async function getMessages({ client, targetUin, page, pageSize = 40 }) {
     },
     {
       tag: 'messages.getMessages',
-      allowEmpty: true, // 空检测交给 collector 处理（区分末页 vs 静默限流）
+      allowEmpty: true, // let collector handle empty (distinguish last page vs silent rate-limit)
       retries: 2,
     }
   );
