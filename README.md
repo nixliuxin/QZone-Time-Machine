@@ -142,6 +142,21 @@ pnpm cli -- pack ./我的备份 --out ./我的备份_packed
 
 > store 模式不压缩：jpg/gif/mp4 本身已压缩，store 模式让启动器可随机读取单张图而无需解压整个包。
 
+### 升级 viewer 而无需重新打包
+
+viewer 改动后，不必把几十 GB 的归档全部重打。`refresh-viewer` 利用 store 模式「像文件夹」的特性，**只在 zip 内原地替换 `index.html`**（追加新文件 + 重写末尾的中央目录），媒体字节完全不动，37 GB 的包也是秒级完成：
+
+```bash
+# 1. 重新构建 viewer
+pnpm --filter @qzone-tools/viewer build
+# 2. 把新 viewer 嵌入各用户源目录的 index.html
+pnpm cli -- deploy-viewer ./我的备份
+# 3. 原地把新 index.html 替换进每个已打包的 zip（不重打包）
+pnpm cli -- refresh-viewer ./我的备份 --out ./我的备份_packed
+```
+
+> 替换前会把待覆盖的尾部（中央目录）备份到 `<zip>.cdbak`，写入成功后才删除，中途中断可恢复。
+
 ## 技术架构
 
 ```

@@ -117,13 +117,10 @@ function packOne(userDir: string, outZip: string, onProgress?: (pct: number) => 
     // a=add, -tzip=zip container, -mx0=store (no compression),
     // -bso0=quiet stdout, -bsp1=progress->stdout, -bb0=no per-file log, -y=assume yes.
     const args = ['a', '-tzip', '-mx0', '-bso0', '-bsp1', '-bb0', '-y', part, ...entries];
-    // Windows strips trailing dots/spaces from normal paths, so folders like
-    // "name." can't be used as a spawn cwd (fails as a misleading ENOENT). The
-    // \\?\ extended-length prefix disables that normalization.
-    const cwd = process.platform === 'win32' && isAbsolute(userDir)
-      ? `\\\\?\\${resolve(userDir)}`
-      : userDir;
-    const child = spawn(SEVEN_ZIP, args, { cwd });
+    // Plain cwd only: spawn/CreateProcess cannot use a \\?\ extended-length cwd,
+    // and trailing dot/space dirs (which a normal cwd can't enter) are routed to
+    // packOneJs instead, so this path always gets a spawn-safe directory.
+    const child = spawn(SEVEN_ZIP, args, { cwd: userDir });
 
     let stderr = '';
     child.stdout.on('data', (buf: Buffer) => {
@@ -301,6 +298,83 @@ export async function packArchive(opts: PackOptions): Promise<{ packed: number; 
 
   if (opts.exe !== false) copyLauncherExe(out, log);
   return { packed, skipped, failed };
+}
+
+export interface RefreshOptions {
+  /** Source dirs holding freshly-generated index.html (run deploy-viewer first). */
+  root: string;
+  /** Folder containing the packed <id>.zip files to patch in place. */
+  out: string;
+  filter?: string;
+  /** Entry to refresh inside each zip (default index.html). */
+  entry?: string;
+  logger?: { info: (m: string) => void; warn: (m: string) => void };
+}
+
+/** Read a possibly trailing-dot/space file via the Windows extended-length prefix. */
+function readFileLong(filePath: string): Buffer {
+  if (process.platform === 'win32' && isAbsolute(filePath) && /[ .]$/.test(basename(filePath))) {
+    return readFileSync(`\\\\?\\${resolve(filePath)}`);
+  }
+  return readFileSync(filePath);
+}
+
+/**
+ * Re-embed a single entry (default `index.html`) into every already-packed zip
+ * WITHOUT re-packing the whole archive. Store mode lets us swap one file by
+ * appending it and rewriting only the central directory, so a viewer code fix
+ * propagates to a multi-GB archive in milliseconds instead of minutes.
+ */
+export async function refreshArchive(opts: RefreshOptions): Promise<{ updated: number; skipped: number; failed: number }> {
+  const log = opts.logger || console;
+  const { root, out } = opts;
+  const entry = opts.entry || 'index.html';
+  const { replaceZipEntry } = await import('./zippatch.js');
+
+  const dirs = readdirSync(root)
+    .filter((n) => {
+      if (n.startsWith('.')) return false;
+      if (opts.filter && !n.includes(opts.filter)) return false;
+      try { return statSync(join(root, n)).isDirectory(); }
+      catch { return false; }
+    })
+    .sort((a, b) => a.localeCompare(b, 'zh'));
+
+  log.info(`Refreshing "${entry}" in zips under ${out} from ${dirs.length} source dirs in ${root}`);
+  let updated = 0, skipped = 0, failed = 0;
+  const isTTY = !!process.stdout.isTTY;
+
+  for (let i = 0; i < dirs.length; i++) {
+    const id = dirs[i];
+    const userDir = join(root, id);
+    const safeId = id.replace(/[ .]+$/, '') || id;
+    const zip = join(out, `${safeId}.zip`);
+    const tag = `[${i + 1}/${dirs.length}]`;
+
+    if (!existsSync(zip)) { skipped++; continue; }
+    let content: Buffer;
+    try {
+      const srcPath = join(userDir, entry);
+      content = (process.platform === 'win32' && /[ .]$/.test(id))
+        ? readFileLong(srcPath)
+        : (existsSync(srcPath) ? readFileSync(srcPath) : (() => { throw new Error('source entry missing'); })());
+    } catch (e) {
+      skipped++;
+      continue;
+    }
+    try {
+      replaceZipEntry(zip, entry, content);
+      updated++;
+      if (isTTY) process.stdout.write('\r' + `  ${tag} ✓ ${safeId}`.slice(0, 78).padEnd(78));
+    } catch (e) {
+      failed++;
+      if (isTTY) process.stdout.write('\r' + ' '.repeat(78) + '\r');
+      log.warn(`${tag} ✗ ${safeId} FAILED: ${(e as Error).message}`);
+    }
+  }
+  if (isTTY) process.stdout.write('\r' + ' '.repeat(78) + '\r');
+  log.info(`Refresh done. updated=${updated} skipped=${skipped} failed=${failed}`);
+  return { updated, skipped, failed };
 }
 
 export { basename };

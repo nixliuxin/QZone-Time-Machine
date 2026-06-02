@@ -1292,4 +1292,20 @@ program
     logger.info(`Done. ${r.packed} packed, ${r.skipped} skipped, ${r.failed} failed. Output: ${out}`);
   });
 
+program
+  .command('refresh-viewer')
+  .description('Re-embed index.html into already-packed zips in place (no full re-pack) after a viewer code change. Run deploy-viewer first.')
+  .argument('<root>', 'Source dirs with fresh index.html (e.g., ./qzone-backup)')
+  .option('-o, --out <dir>', 'Folder containing the packed zips (default: <root>_packed)')
+  .option('--filter <substr>', 'Only refresh dirs whose name includes this substring')
+  .option('--entry <name>', 'Entry to refresh inside each zip', 'index.html')
+  .action(async (root: string, opts: { out?: string; filter?: string; entry?: string }) => {
+    const { refreshArchive } = await import('./pack.js');
+    const rootAbs = resolve(root);
+    const out = opts.out ? resolve(opts.out) : `${rootAbs.replace(/[\\/]+$/, '')}_packed`;
+    const logger = makeLogger('refresh-viewer');
+    const r = await refreshArchive({ root: rootAbs, out, filter: opts.filter, entry: opts.entry, logger });
+    logger.info(`Done. ${r.updated} updated, ${r.skipped} skipped, ${r.failed} failed. Output: ${out}`);
+  });
+
 program.parse();
