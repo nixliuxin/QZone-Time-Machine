@@ -93,7 +93,7 @@ export function PhotoAlbums() {
 }
 
 function AlbumCard({ album }: { album: Album }) {
-  const cover = album.cover_url || album.custom_filepath || '';
+  const cover = album.custom_filepath || album.cover_url || '';
   const createDate = formatDateShort(album.createtime);
 
   return (
@@ -166,7 +166,7 @@ function PhotoGrid({ photos, albumId, albumName }: { photos: Photo[]; albumId: s
   const pageOffset = (currentPage - 1) * pageSize;
 
   const lightboxItems: LightboxItem[] = useMemo(() => photos.map((p) => {
-    const src = p.url || p.custom_filepath || p.custom_url || '';
+    const src = p.custom_filepath || p.url || p.custom_url || '';
     return {
       src,
       thumb: p.custom_filepath || src,
@@ -201,7 +201,7 @@ function PhotoGrid({ photos, albumId, albumName }: { photos: Photo[]; albumId: s
 }
 
 function PhotoThumb({ photo, onClick }: { photo: Photo; albumId: string; index: number; onClick: () => void }) {
-  const src = photo.url || photo.custom_filepath || photo.custom_url || '';
+  const src = photo.custom_filepath || photo.url || photo.custom_url || '';
   if (!src) return null;
 
   const name = photo.name || '';
@@ -261,7 +261,7 @@ export function PhotoView() {
     );
   }
 
-  const src = photo.url || photo.custom_filepath || photo.custom_url || '';
+  const src = photo.custom_filepath || photo.url || photo.custom_url || '';
   const name = photo.name || photo.desc || '';
   const filename = photo.custom_filename || src.split('/').pop() || '';
   const filesize = photo.photocubage ? formatFileSize(photo.photocubage) : '';
