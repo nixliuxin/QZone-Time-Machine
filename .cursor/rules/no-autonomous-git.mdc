@@ -1,0 +1,22 @@
+---
+description: Require explicit user permission before any git write or rule/config change
+alwaysApply: true
+---
+
+# No Autonomous Git Writes or Rule Changes
+
+## Forbidden without explicit user permission
+- Any git command that changes state: `commit`, `add`/stage, `push`, `merge`,
+  `rebase`, `reset`, `checkout`/`switch`, `restore`, `stash`, `tag`,
+  `cherry-pick`, `revert`, `branch -D`, `clean`.
+- Creating, editing, or deleting rule files (`.cursor/rules/**`, `AGENTS.md`)
+  or project config — unless the user asks for it in the current turn.
+
+## Allowed without asking
+- Read-only git: `status`, `diff`, `log`, `show`, `branch --list`.
+- Normal source/file edits that are not git commits and not rule changes.
+
+## Workflow
+- When changes are ready, summarize what changed and ask before committing.
+- A one-time "commit" instruction authorizes only that commit, not future ones.
+- If unsure whether an action counts as a write, ask first.
