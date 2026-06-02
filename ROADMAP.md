@@ -54,7 +54,14 @@
 - [x] `pack` 命令：每用户打包为 store 模式 zip + 生成 `_manifest.json`（云同步友好，对象数从数万降到「每人 1 zip」）
 - [x] 免安装启动器（`packages/launcher`）：本地服务 + 全员列表首页 + 从 zip 流式读取媒体（HTTP Range）
 - [x] Node SEA 编译为单文件 exe（无需安装 Node，双击即用，自动识别所在目录）
-- [ ] 启动器首页增强：分组/标签筛选、按内容量排序切换
+- [x] 单 zip 模式：把某个人的 `.zip` 拖到 exe 上即可只看那一个人
+
+### 待优化（按性价比排序）
+- [ ] **增量打包**：`pack` 按 mtime 对比，只重打有更新的人（现在 `--skip-existing` 只是"有就跳过"）
+- [ ] **拼音搜索**：首页搜索支持拼音匹配（如 "wangbo" 搜到"王博"）
+- [ ] **首页过滤开关**：「只看有内容」切换，隐藏无内容/无权限用户
+- [ ] **无窗口启动**：exe 双击不弹命令行窗口 + 简洁"正在启动…"页面
+- [ ] **一键编排**：`backup-all --pack --with-launcher` 串起 备份 → 嵌入 viewer → 打包 → 放入 exe，直接产出 ready-to-use 文件夹
 - [ ] 代码签名（消除 Windows SmartScreen 警告）
 - [ ] macOS / Linux 启动器构建
 

@@ -9,7 +9,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const OUT_NAME = process.env.EXE_NAME || 'QQ空间时光机.exe';
+const OUT_NAME = process.env.EXE_NAME || '_QQ空间时光机.exe';
 const exePath = join(root, 'dist-exe', OUT_NAME);
 const FUSE = 'NODE_SEA_FUSE_fce680ab2cc467b6e072b8b5df1996b2';
 

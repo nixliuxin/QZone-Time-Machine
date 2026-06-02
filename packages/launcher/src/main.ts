@@ -45,12 +45,21 @@ function openBrowser(url: string): void {
 function listen(server: import('node:http').Server, startPort: number): Promise<number> {
   return new Promise((resolve, reject) => {
     let port = startPort;
+    let attempts = 0;
+    const onError = (err: NodeJS.ErrnoException) => {
+      if (err.code === 'EADDRINUSE' && attempts < 100) {
+        attempts++; port++; setTimeout(tryListen, 0);
+      } else {
+        reject(err);
+      }
+    };
     const tryListen = () => {
-      server.once('error', (err: NodeJS.ErrnoException) => {
-        if (err.code === 'EADDRINUSE' && port < startPort + 50) { port++; setTimeout(tryListen, 0); }
-        else reject(err);
+      server.removeListener('error', onError);
+      server.once('error', onError);
+      server.listen(port, '127.0.0.1', () => {
+        server.removeListener('error', onError);
+        resolve(port);
       });
-      server.listen(port, '127.0.0.1', () => resolve(port));
     };
     tryListen();
   });

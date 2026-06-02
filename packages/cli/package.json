@@ -12,6 +12,7 @@
     "start": "node dist/index.js"
   },
   "dependencies": {
+    "7zip-bin": "^5.2.0",
     "axios": "^1.7.0",
     "commander": "^12.1.0",
     "iconv-lite": "^0.6.3",

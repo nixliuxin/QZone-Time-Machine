@@ -126,14 +126,15 @@ pnpm cli -- convert ./旧数据目录 ./输出目录
 `pack` 命令把每个用户目录打包成**单个 store 模式（不压缩）zip**，整个归档从海量碎文件变为「每人 1 个 zip」，便于云盘同步；配合免安装启动器即可流畅浏览：
 
 ```bash
-# 把归档目录下每个用户打包成 <用户>.zip，并生成 _manifest.json
-pnpm cli -- pack ./我的备份 --out ./我的备份_packed
-
-# 生成免安装启动器 exe（Windows，基于 Node SEA，单文件）
+# 先生成免安装启动器 exe（Windows，基于 Node SEA，单文件）
 pnpm --filter @qzone-tools/launcher run exe
+
+# 把归档目录下每个用户打包成 <用户>.zip，生成 _manifest.json，
+# 并自动把最新的 _QQ空间时光机.exe 复制进输出目录（加 --no-exe 可跳过）
+pnpm cli -- pack ./我的备份 --out ./我的备份_packed
 ```
 
-把生成的 `QQ空间时光机.exe` 放进打包目录，**双击即用**：
+输出目录即「开箱即用」：`_manifest.json` + 启动器 `_QQ空间时光机.exe` + 每人一个 zip（下划线前缀让前两者排序时与用户 zip 分开）。双击 `_QQ空间时光机.exe`：
 
 - 自动启动本地服务并打开浏览器，展示**全部用户列表**（头像 + 昵称 + 内容数量 + 搜索）
 - 点击任意用户即可浏览其完整空间；把单个 `.zip` 拖到 exe 上则只看那一个人

@@ -23,11 +23,20 @@ const MIME: Record<string, string> = {
 
 export interface UserMeta {
   id: string;
+  uin?: number;
   name: string;
   nickname?: string;
+  remark?: string;
   avatar?: string;
   counts?: Record<string, number>;
   isOwner?: boolean;
+}
+
+/** Folder id is `<uin>_<remark-or-nickname>`; split it into the two parts. */
+function splitId(id: string): { uin?: number; suffix?: string } {
+  const m = id.match(/^(\d+)_(.*)$/);
+  if (!m) return {};
+  return { uin: Number(m[1]), suffix: m[2] || undefined };
 }
 
 interface UserEntry {
@@ -80,16 +89,22 @@ export function createArchiveServer(target: string): ArchiveServer {
       try {
         const src = await getSource(u);
         const r = await src.read('data/user.json');
-        let meta: UserMeta = { id: u.id, name: u.id };
+        const { uin: idUin, suffix } = splitId(u.id);
+        let meta: UserMeta = { id: u.id, uin: idUin, name: suffix || u.id, remark: suffix };
         if (r) {
           const txt = await streamToString(r.stream);
           const j = JSON.parse(txt);
+          const uin = Number(j.uin) || idUin;
+          const remark = suffix && suffix !== j.nickname ? suffix : undefined;
+          const counts = pickCounts(j);
           meta = {
             id: u.id,
-            name: j.name || j.nickname || u.id,
+            uin,
+            name: suffix || j.nickname || u.id,
             nickname: j.nickname,
-            avatar: j.uin ? `media/avatars/${j.uin}.jpg` : undefined,
-            counts: pickCounts(j),
+            remark,
+            avatar: uin ? `media/avatars/${uin}.jpg` : undefined,
+            counts: Object.keys(counts).length ? counts : undefined,
             isOwner: j.is_owner === true,
           };
         }
@@ -198,7 +213,14 @@ function loadManifest(root: string, users: UserEntry[]): UserMeta[] | null {
     if (!arr.length) return null;
     // Only keep manifest entries that actually have a discoverable source.
     const ids = new Set(users.map((u) => u.id));
-    const filtered = arr.filter((u) => ids.has(u.id));
+    const filtered = arr.filter((u) => ids.has(u.id)).map((u) => {
+      // Self-heal older manifests that predate the uin/remark fields: both are
+      // derivable from the folder id, so backfill them without reopening zips.
+      if (u.uin && u.remark !== undefined) return u;
+      const { uin, suffix } = splitId(u.id);
+      const remark = suffix && suffix !== u.nickname ? suffix : undefined;
+      return { ...u, uin: u.uin ?? uin, remark: u.remark ?? remark };
+    });
     return filtered.length ? filtered : null;
   } catch { return null; }
 }
