@@ -189,6 +189,127 @@ function packUser(userDir: string, outZip: string, onProgress?: (pct: number) =>
   return /[ .]$/.test(basename(userDir)) ? packOneJs(userDir, outZip) : packOne(userDir, outZip, onProgress);
 }
 
+/**
+ * Like packOne but zips ALL top-level entries of the folder (not just the
+ * viewer's data/media subset), so it works for any layout (e.g. legacy archives
+ * with Albums/Blogs/... folders). Quiet (no per-file progress) since callers run
+ * many of these in parallel.
+ */
+function packOneRaw(userDir: string, outZip: string): Promise<void> {
+  return new Promise((res, rej) => {
+    const entries = readdirSync(userDir);
+    if (!entries.length) return rej(new Error('empty folder'));
+    const part = `${outZip}.part`;
+    try { if (existsSync(part)) rmSync(part, { force: true }); } catch { /* ignore */ }
+    const args = ['a', '-tzip', '-mx0', '-bso0', '-bsp0', '-bb0', '-y', part, ...entries];
+    const child = spawn(SEVEN_ZIP, args, { cwd: userDir });
+    let stderr = '';
+    child.stderr.on('data', (b: Buffer) => { stderr += b.toString(); });
+    child.on('error', rej);
+    child.on('close', (code) => {
+      if (code === 0) { try { renameSync(part, outZip); res(); } catch (e) { rej(e as Error); } }
+      else { try { if (existsSync(part)) rmSync(part, { force: true }); } catch { /* ignore */ } rej(new Error(`7-Zip exited ${code}${stderr ? `: ${stderr.trim().split('\n').pop()}` : ''}`)); }
+    });
+  });
+}
+
+/** Pure-JS full-folder packer for trailing dot/space dirs (spawn can't cwd into them). */
+function packOneRawJs(userDir: string, outZip: string): Promise<void> {
+  return new Promise((res, rej) => {
+    const lp = process.platform === 'win32' && isAbsolute(userDir) ? `\\\\?\\${resolve(userDir)}` : userDir;
+    const files: { abs: string; rel: string }[] = [];
+    const walk = (absDir: string, rel: string) => {
+      for (const name of readdirSync(absDir)) {
+        const abs = `${absDir}\\${name}`;
+        const childRel = rel ? `${rel}/${name}` : name;
+        const st = statSync(abs);
+        if (st.isDirectory()) walk(abs, childRel);
+        else if (st.isFile()) files.push({ abs, rel: childRel });
+      }
+    };
+    walk(lp, '');
+    if (!files.length) return rej(new Error('empty folder'));
+    const part = `${outZip}.part`;
+    try { if (existsSync(part)) rmSync(part, { force: true }); } catch { /* ignore */ }
+    const zip = new yazl.ZipFile();
+    const ws = createWriteStream(part);
+    ws.on('close', () => { try { renameSync(part, outZip); res(); } catch (e) { rej(e as Error); } });
+    ws.on('error', rej);
+    zip.outputStream.on('error', rej);
+    zip.outputStream.pipe(ws);
+    for (const f of files) zip.addFile(f.abs, f.rel, { compress: false });
+    zip.end();
+  });
+}
+
+function packUserRaw(userDir: string, outZip: string): Promise<void> {
+  return /[ .]$/.test(basename(userDir)) ? packOneRawJs(userDir, outZip) : packOneRaw(userDir, outZip);
+}
+
+export interface PackFoldersOptions {
+  root: string;
+  out: string;
+  filter?: string;
+  /** Number of folders to pack in parallel (default 4). */
+  concurrency?: number;
+  /** Skip folders whose zip already exists (for resuming). Default false. */
+  skipExisting?: boolean;
+  logger?: { info: (m: string) => void; warn: (m: string) => void };
+}
+
+/**
+ * Store-mode zip every top-level folder (full contents) with a bounded
+ * concurrency pool. Layout-agnostic: unlike `pack`, it does not assume the
+ * viewer's data/media structure and writes no manifest — just one zip per folder.
+ */
+export async function packFoldersRaw(opts: PackFoldersOptions): Promise<{ packed: number; skipped: number; failed: number }> {
+  const log = opts.logger || console;
+  const { root, out } = opts;
+  const concurrency = Math.max(1, opts.concurrency || 4);
+  if (!existsSync(out)) mkdirSync(out, { recursive: true });
+
+  const dirs = readdirSync(root)
+    .filter((n) => {
+      if (n.startsWith('.')) return false;
+      if (opts.filter && !n.includes(opts.filter)) return false;
+      try { return statSync(join(root, n)).isDirectory(); } catch { return false; }
+    })
+    .sort((a, b) => a.localeCompare(b, 'zh'));
+
+  log.info(`Packing ${dirs.length} folders from ${root} -> ${out} (concurrency=${concurrency}, full-folder, store mode)`);
+  let packed = 0, skipped = 0, failed = 0, done = 0;
+  const t0 = Date.now();
+  let next = 0;
+
+  const worker = async () => {
+    while (true) {
+      const i = next++;
+      if (i >= dirs.length) break;
+      const id = dirs[i];
+      const userDir = join(root, id);
+      const safeId = id.replace(/[ .]+$/, '') || id;
+      const outZip = join(out, `${safeId}.zip`);
+      done++;
+      const tag = `[${done}/${dirs.length}]`;
+      if (opts.skipExisting && existsSync(outZip)) { skipped++; continue; }
+      try {
+        await packUserRaw(userDir, outZip);
+        const mb = (statSync(outZip).size / 1024 / 1024).toFixed(1);
+        packed++;
+        log.info(`${tag} ✓ ${safeId}  ${mb} MB  (ok=${packed} skip=${skipped} fail=${failed})`);
+      } catch (e) {
+        failed++;
+        log.warn(`${tag} ✗ ${id}: ${(e as Error).message}  (ok=${packed} skip=${skipped} fail=${failed})`);
+      }
+    }
+  };
+
+  await Promise.all(Array.from({ length: concurrency }, () => worker()));
+  const secs = ((Date.now() - t0) / 1000).toFixed(0);
+  log.info(`Done in ${secs}s. packed=${packed} skipped=${skipped} failed=${failed}. Output: ${out}`);
+  return { packed, skipped, failed };
+}
+
 function readManifestUser(userDir: string, id: string): ManifestUser {
   const { uin: idUin, suffix } = splitId(id);
   const userJson = join(userDir, 'data', 'user.json');

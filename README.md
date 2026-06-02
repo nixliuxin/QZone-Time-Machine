@@ -157,6 +157,17 @@ pnpm cli -- refresh-viewer ./我的备份 --out ./我的备份_packed
 
 > 替换前会把待覆盖的尾部（中央目录）备份到 `<zip>.cdbak`，写入成功后才删除，中途中断可恢复。
 
+### 打包任意归档（pack-folders）
+
+`pack` 假定本工具的 `data/` + `media/` 目录结构。若要打包**任意结构**的归档（例如旧版导出的 `Albums/Blogs/...` 布局），用 `pack-folders`：它把每个顶层文件夹的**全部内容**打成 store 模式 zip，并行处理、不生成 manifest。
+
+```bash
+# 把 <根目录> 下每个文件夹打成 <文件夹>.zip（默认就地输出），6 路并行
+pnpm cli -- pack-folders ./任意归档 -j 6 [--out ./输出目录] [--skip-existing]
+```
+
+> `-j` 控制并行度（SSD 可调大、机械盘调小）；崩溃安全（先写 `.zip.part` 再原子改名）；可重跑，`--skip-existing` 断点续传。
+
 ## 技术架构
 
 ```

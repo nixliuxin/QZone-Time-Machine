@@ -12,7 +12,7 @@ const { Session } = require('../engine/session.js');
 const { login } = require('../engine/qr-login.js');
 const { QzoneClient, AuthInvalidError } = require('../engine/client.js');
 const { ProgressStore, STATUSES, MODULES } = require('../engine/progress.js');
-const { Downloader, sanitizeFilename } = require('../engine/downloader.js');
+const { Downloader, sanitizeFilename, SANITIZE_RULES } = require('../engine/downloader.js');
 const { collectUserInfo, updateUserCounts } = require('../engine/collectors/common.js');
 const { collectMessages } = require('../engine/collectors/messages.js');
 const { collectBlogs } = require('../engine/collectors/blogs.js');
@@ -245,6 +245,35 @@ program
       const u = await runModule('common', () =>
         collectUserInfo({ client, targetUin, outputRoot: userDir, logger })
       );
+
+      // Record name sanitization into the user's own data.json so any cleaned name
+      // is always traceable back to the original. Matching/dedup keys off uin, never
+      // the display name. The folder uses the display name (remark||name); the QZone
+      // nickname is recorded separately since it is where messy strings (emoji markup,
+      // whitespace, trailing dots) usually live.
+      try {
+        const sName = sanitizeFilename(name);
+        const ujPath = join(userDir, 'data', 'user.json');
+        let uj: any = {};
+        if (existsSync(ujPath)) { try { uj = JSON.parse(readFileSync(ujPath, 'utf8')); } catch { /* ignore corrupt */ } }
+        else { mkdirSync(join(userDir, 'data'), { recursive: true }); }
+        const nick = uj.nickname != null ? String(uj.nickname) : null;
+        const nickClean = nick != null ? sanitizeFilename(nick) : null;
+        uj.sanitize = {
+          folder: basename(userDir),
+          display_name: sName,            // folder suffix (cleaned name actually used)
+          display_name_raw: name,         // raw display name (remark||name) before sanitize
+          nickname_raw: nick,             // QZone nickname as stored
+          nickname_sanitized: nickClean,  // nickname after the same engine sanitizer
+          changed: name !== sName || (nick != null && nick !== nickClean),
+          rules: SANITIZE_RULES,
+          at: new Date().toISOString(),
+        };
+        writeFileSync(ujPath, JSON.stringify(uj, null, 2), 'utf8');
+      } catch (e: any) {
+        logger.warn(`[sanitize] failed to record name sanitize: ${e.message}`);
+      }
+
       if (u.status === 'no_access') {
         logger.warn('No access to this user\'s QZone, aborting.');
         progress.setOverall('no_access');
@@ -1306,6 +1335,23 @@ program
     const logger = makeLogger('refresh-viewer');
     const r = await refreshArchive({ root: rootAbs, out, filter: opts.filter, entry: opts.entry, logger });
     logger.info(`Done. ${r.updated} updated, ${r.skipped} skipped, ${r.failed} failed. Output: ${out}`);
+  });
+
+program
+  .command('pack-folders')
+  .description('Store-mode zip every top-level folder (full contents, layout-agnostic) in parallel. No manifest. Good for legacy archives.')
+  .argument('<root>', 'Root directory containing the folders to zip (e.g., ./qzone-backup)')
+  .option('-o, --out <dir>', 'Output directory for the zips (default: <root>, i.e. in place)')
+  .option('--filter <substr>', 'Only pack folders whose name includes this substring')
+  .option('-j, --concurrency <n>', 'Number of folders to pack in parallel', (v) => parseInt(v, 10), 4)
+  .option('--skip-existing', 'Skip folders whose zip already exists (resume)', false)
+  .action(async (root: string, opts: { out?: string; filter?: string; concurrency?: number; skipExisting?: boolean }) => {
+    const { packFoldersRaw } = await import('./pack.js');
+    const rootAbs = resolve(root);
+    const out = opts.out ? resolve(opts.out) : rootAbs;
+    const logger = makeLogger('pack-folders');
+    const r = await packFoldersRaw({ root: rootAbs, out, filter: opts.filter, concurrency: opts.concurrency, skipExisting: opts.skipExisting, logger });
+    logger.info(`Done. ${r.packed} packed, ${r.skipped} skipped, ${r.failed} failed. Output: ${out}`);
   });
 
 program.parse();

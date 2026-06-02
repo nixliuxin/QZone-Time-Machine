@@ -18,12 +18,30 @@ function ensureDir(p) {
   if (!fs.existsSync(p)) fs.mkdirSync(p, { recursive: true });
 }
 
+// Keep SANITIZE_RULES in lock-step with the transforms below — it is recorded
+// verbatim into each user's sanitize provenance (data/user.json / _sanitize.json).
+const SANITIZE_RULES = [
+  'strip-qq-emoji-markup',     // [em]e258158[/em] -> (removed)
+  'illegal-chars->_',          // <>:"/\|?* and control chars -> _
+  'collapse-whitespace',       // runs of whitespace -> single space
+  'trim',                      // drop leading/trailing whitespace
+  'strip-trailing-dot/space',  // Windows can't open names ending in . or space
+  'max-200-chars',
+];
+
 function sanitizeFilename(name) {
   return String(name || '')
+    // QZone nicknames embed sticker markup like [em]e258158[/em]; the "/" inside
+    // would otherwise become "_" leaving ugly [em]e258158[_em]. Strip the whole tag.
+    .replace(/\[em\][^\[\]]*\[\/em\]/g, '')
     .replace(/[<>:"/\\|?*\x00-\x1F]/g, '_')
     .replace(/\s+/g, ' ')
     .trim()
-    .slice(0, 200);
+    .slice(0, 200)
+    // Windows forbids trailing dots/spaces: such files/folders can't be opened
+    // or right-clicked in Explorer and need \\?\ paths everywhere. Strip them so
+    // display names never produce unusable paths (matching always keys off uin).
+    .replace(/[ .]+$/, '');
 }
 
 function extFromUrl(url) {
@@ -196,6 +214,7 @@ module.exports = {
   FailureLog,
   ensureDir,
   sanitizeFilename,
+  SANITIZE_RULES,
   extFromUrl,
   extFromContentType,
 };
