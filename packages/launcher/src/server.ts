@@ -39,10 +39,30 @@ interface UserEntry {
 
 export interface ServeOptions { root: string; port?: number; }
 
-export function createArchiveServer(root: string) {
-  const users = discoverUsers(root);
+export interface ArchiveServer {
+  server: ReturnType<typeof createServer>;
+  userCount: number;
+  /** When the target was a single zip, the id to open directly. */
+  singleId: string | null;
+}
+
+export function createArchiveServer(target: string): ArchiveServer {
+  // Target may be a directory (scan all users) or a single <id>.zip file.
+  let manifestDir = target;
+  let singleId: string | null = null;
+  let users: UserEntry[];
+  let st;
+  try { st = statSync(target); } catch { st = null; }
+  if (st && st.isFile() && extname(target).toLowerCase() === '.zip') {
+    const id = basename(target, extname(target));
+    users = [{ id, kind: 'zip', path: target }];
+    manifestDir = join(target, '..');
+    singleId = id;
+  } else {
+    users = discoverUsers(target);
+  }
   const byId = new Map(users.map((u) => [u.id, u]));
-  let manifest: UserMeta[] | null = loadManifest(root, users);
+  let manifest: UserMeta[] | null = loadManifest(manifestDir, users);
 
   async function getSource(entry: UserEntry): Promise<UserSource> {
     if (!entry.source) {
@@ -120,7 +140,7 @@ export function createArchiveServer(root: string) {
   };
 
   const server = createServer(handler);
-  return { server, userCount: users.length };
+  return { server, userCount: users.length, singleId };
 }
 
 async function serveAsset(req: IncomingMessage, res: ServerResponse, src: UserSource, asset: string) {

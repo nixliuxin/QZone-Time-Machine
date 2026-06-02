@@ -64,20 +64,23 @@ async function main() {
   const rootArg = args.find((a, i) => !a.startsWith('--') && (portIdx < 0 || i !== portIdx + 1));
   const root = resolveRoot(rootArg);
 
-  const { server, userCount } = createArchiveServer(root);
+  const { server, userCount, singleId } = createArchiveServer(root);
   if (userCount === 0) {
-    console.error(`\n  未在该目录找到任何归档：${root}`);
-    console.error('  请把本程序放到包含 *.zip（或用户文件夹）的归档目录中再运行。\n');
+    console.error(`\n  未在该位置找到任何归档：${root}`);
+    console.error('  用法：把本程序放进包含 *.zip 的归档目录后双击，');
+    console.error('  或把某个人的 .zip 文件拖到本程序上单独查看。\n');
     process.stdout.write('按回车键退出…');
     process.stdin.once('data', () => process.exit(1));
     return;
   }
 
   const port = await listen(server, startPort);
-  const url = `http://127.0.0.1:${port}/`;
+  const base = `http://127.0.0.1:${port}/`;
+  // A single zip opens that person directly; a directory opens the list homepage.
+  const url = singleId ? `${base}u/${encodeURIComponent(singleId)}/` : base;
   console.log(`\n  QQ空间时光机 已启动`);
-  console.log(`  归档目录: ${root}`);
-  console.log(`  共 ${userCount} 人`);
+  console.log(`  来源: ${root}`);
+  console.log(singleId ? `  单人模式: ${singleId}` : `  共 ${userCount} 人`);
   console.log(`\n  浏览器地址: ${url}`);
   console.log(`  （关闭此窗口即停止服务）\n`);
   if (!noOpen) openBrowser(url);
