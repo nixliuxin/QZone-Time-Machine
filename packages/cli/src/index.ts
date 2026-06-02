@@ -2,7 +2,7 @@
 import { Command } from 'commander';
 import { createRequire } from 'node:module';
 import { resolve, join, basename } from 'node:path';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync, statSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { convertUser, convertBatch, embedViewer, downloadAllEmojis } from './convert.js';
 
@@ -11,7 +11,7 @@ const require = createRequire(import.meta.url);
 const { Session } = require('../engine/session.js');
 const { login } = require('../engine/qr-login.js');
 const { QzoneClient, AuthInvalidError } = require('../engine/client.js');
-const { ProgressStore } = require('../engine/progress.js');
+const { ProgressStore, STATUSES, MODULES } = require('../engine/progress.js');
 const { Downloader, sanitizeFilename } = require('../engine/downloader.js');
 const { collectUserInfo, updateUserCounts } = require('../engine/collectors/common.js');
 const { collectMessages } = require('../engine/collectors/messages.js');
@@ -153,10 +153,11 @@ program
   .option('--no-download', 'Skip media downloads (JSON only)')
   .option('--no-photos', 'Skip photo album collection')
   .option('--no-convert', 'Skip automatic conversion to viewer format')
-  .option('--enrich-comments', 'Fetch full comment threads')
-  .option('--enrich-likes', 'Fetch like details')
+  .option('--no-enrich-comments', 'Skip comment enrichment (enabled by default)')
+  .option('--no-enrich-likes', 'Skip like enrichment (enabled by default)')
   .option('--sample <pages>', 'Sample mode: limit pages per module', '0')
   .option('--inline-concurrency <n>', 'Concurrent inline resource downloads', '6')
+  .option('--incremental', 'Only fetch new items (ID-based dedup against existing data)', false)
   .action(async (targetUinStr, opts) => {
     const targetUin = Number(targetUinStr);
     if (!targetUin || !Number.isFinite(targetUin)) {
@@ -200,11 +201,16 @@ program
 
     const counts: Record<string, number> = {};
 
+    const incremental = !!opts.incremental;
+
     const runModule = async (label: string, fn: () => Promise<any>) => {
       const mod = progress.module(label);
-      if (mod.status === 'done') {
+      if (mod.status === 'done' && !incremental) {
         logger.info(`--- ${label} --- (already done, skipping)`);
         return { status: 'done', total: mod.totalReported, fetched: mod.fetched, items: [] };
+      }
+      if (mod.status === 'done' && incremental) {
+        logger.info(`--- ${label} --- (done, incremental re-check)`);
       }
       logger.info(`--- ${label} ---`);
       try {
@@ -249,21 +255,21 @@ program
 
       // 2) Messages
       const m = await runModule('messages', () =>
-        collectMessages({ client, targetUin, outputRoot: userDir, progress, logger, pageLimit: samplePages })
+        collectMessages({ client, targetUin, outputRoot: userDir, progress, logger, pageLimit: samplePages, incremental })
       );
       counts.messages = m.fetched;
       if (m.fetched > 0) await inlineNow('messages');
 
       // 3) Blogs
       const b = await runModule('blogs', () =>
-        collectBlogs({ client, targetUin, outputRoot: userDir, progress, logger, pageLimit: samplePages })
+        collectBlogs({ client, targetUin, outputRoot: userDir, progress, logger, pageLimit: samplePages, incremental })
       );
       counts.blogs = b.fetched;
       if (b.fetched > 0) await inlineNow('blogs');
 
       // 4) Boards
       const bo = await runModule('boards', () =>
-        collectBoards({ client, targetUin, outputRoot: userDir, progress, logger, pageLimit: samplePages })
+        collectBoards({ client, targetUin, outputRoot: userDir, progress, logger, pageLimit: samplePages, incremental })
       );
       counts.boards = bo.fetched;
       if (bo.fetched > 0) await inlineNow('boards');
@@ -297,7 +303,7 @@ program
 
       // 9) Shares
       const sh = await runModule('shares', () =>
-        collectShares({ client, targetUin, outputRoot: userDir, progress, logger })
+        collectShares({ client, targetUin, outputRoot: userDir, progress, logger, incremental })
       );
       counts.shares = sh.fetched;
       if (sh.fetched > 0) await inlineNow('shares');
@@ -323,15 +329,27 @@ program
       counts.visitors = Math.max(vs.total || 0, vs.fetched || 0);
 
       // 12) Enrich (optional)
+      // Helper: load items from disk if in-memory array is empty (module was already done)
+      const loadFromDisk = (file: string): any[] => {
+        const p = join(userDir, 'data', file);
+        if (!existsSync(p)) return [];
+        try {
+          const raw = JSON.parse(readFileSync(p, 'utf8'));
+          return Array.isArray(raw) ? raw : (raw?.items || []);
+        } catch { return []; }
+      };
+
       if (opts.enrichComments) {
         logger.info('--- enrich.comments ---');
-        if (m.items?.length) {
-          await enrichers.enrichMessageComments({ client, targetUin, items: m.items, logger });
-          writeData(join(userDir, 'data', 'messages.json'), m.items);
+        const msgItems = m.items?.length ? m.items : loadFromDisk('messages.json');
+        if (msgItems.length) {
+          await enrichers.enrichMessageComments({ client, targetUin, items: msgItems, logger });
+          writeData(join(userDir, 'data', 'messages.json'), msgItems);
         }
-        if (b.items?.length) {
-          await enrichers.enrichBlogComments({ client, targetUin, items: b.items, logger });
-          writeData(join(userDir, 'data', 'blogs.json'), b.items);
+        const blogItems = b.items?.length ? b.items : loadFromDisk('blogs.json');
+        if (blogItems.length) {
+          await enrichers.enrichBlogComments({ client, targetUin, items: blogItems, logger });
+          writeData(join(userDir, 'data', 'blogs.json'), blogItems);
         }
         // Enrich album photo comments from disk
         const photosDir = join(userDir, 'data', 'photos');
@@ -362,21 +380,23 @@ program
 
       if (opts.enrichLikes) {
         logger.info('--- enrich.likes ---');
-        if (m.items?.length) {
+        const msgItemsL = m.items?.length ? m.items : loadFromDisk('messages.json');
+        if (msgItemsL.length) {
           await enrichers.enrichLikes({
-            client, items: m.items,
+            client, items: msgItemsL,
             buildKey: (it: any) => buildUniKey('mood', targetUin, it.tid),
             label: 'messages', logger,
           });
-          writeData(join(userDir, 'data', 'messages.json'), m.items);
+          writeData(join(userDir, 'data', 'messages.json'), msgItemsL);
         }
-        if (b.items?.length) {
+        const blogItemsL = b.items?.length ? b.items : loadFromDisk('blogs.json');
+        if (blogItemsL.length) {
           await enrichers.enrichLikes({
-            client, items: b.items,
+            client, items: blogItemsL,
             buildKey: (it: any) => buildUniKey('blog', targetUin, it.blogId || it.blogid),
             label: 'blogs', logger,
           });
-          writeData(join(userDir, 'data', 'blogs.json'), b.items);
+          writeData(join(userDir, 'data', 'blogs.json'), blogItemsL);
         }
       }
 
@@ -565,10 +585,11 @@ program
   .option('--daily-limit <n>', 'Max users to process per run (0=unlimited)', '50')
   .option('--no-download', 'Skip media downloads')
   .option('--no-convert', 'Skip conversion to viewer format')
-  .option('--enrich-comments', 'Fetch full comment threads')
-  .option('--enrich-likes', 'Fetch like details')
+  .option('--no-enrich-comments', 'Skip comment enrichment (enabled by default)')
+  .option('--no-enrich-likes', 'Skip like enrichment (enabled by default)')
   .option('--skip <uins>', 'Comma-separated UINs to skip')
   .option('--sample <pages>', 'Sample mode: limit pages per module', '0')
+  .option('--incremental', 'Only fetch new items (ID-based dedup)', false)
   .action(async (opts) => {
     const dataDir = resolve(opts.dataDir);
     const cookiesFile = join(dataDir, 'cookies.json');
@@ -625,7 +646,7 @@ program
 
       const friend = items[i];
       const uin = friend.uin || friend.fuin;
-      const name = friend.name || friend.remark || `User_${uin}`;
+      const name = friend.remark || friend.name || `User_${uin}`;
 
       if (skipSet.has(String(uin))) {
         logger.info(`[${i + 1}/${items.length}] SKIP ${uin} (${name})`);
@@ -639,8 +660,9 @@ program
       const args = ['backup', String(uin), '-d', dataDir, '-o', opts.output, '-n', `"${name}"`];
       if (!opts.download) args.push('--no-download');
       if (!opts.convert) args.push('--no-convert');
-      if (opts.enrichComments) args.push('--enrich-comments');
-      if (opts.enrichLikes) args.push('--enrich-likes');
+      if (opts.enrichComments === false) args.push('--no-enrich-comments');
+      if (opts.enrichLikes === false) args.push('--no-enrich-likes');
+      if (opts.incremental) args.push('--incremental');
       if (opts.sample !== '0') args.push('--sample', opts.sample);
 
       const t0 = Date.now();
@@ -689,6 +711,421 @@ program
     } else {
       convertUser(sourceDir, outputDir);
     }
+  });
+
+program
+  .command('generate-progress')
+  .description('Scan user data dirs and create synthetic .progress files for converted/backed-up users')
+  .argument('<root>', 'Root directory containing user dirs (e.g., ./qzone-backup)')
+  .option('--overwrite', 'Overwrite existing progress files', false)
+  .action((root: string, opts: { overwrite: boolean }) => {
+    const rootDir = resolve(root);
+    if (!existsSync(rootDir)) {
+      console.error(`Root directory not found: ${rootDir}`);
+      process.exit(1);
+    }
+
+    const progressDir = join(rootDir, '.progress');
+    mkdirSync(progressDir, { recursive: true });
+
+    const userDirs = readdirSync(rootDir).filter(d => {
+      if (d.startsWith('.')) return false;
+      const full = join(rootDir, d);
+      return statSync(full).isDirectory() && existsSync(join(full, 'data'));
+    });
+
+    const MODULE_FILE_MAP: Record<string, string> = {
+      messages: 'messages.json',
+      blogs: 'blogs.json',
+      boards: 'boards.json',
+      friends: 'friends.json',
+      videos: 'videos.json',
+      diaries: 'diaries.json',
+      favorites: 'favorites.json',
+      shares: 'shares.json',
+      visitors: 'visitors.json',
+    };
+
+    const ENRICHABLE_MODULES = ['messages', 'blogs', 'shares', 'videos'];
+
+    let created = 0;
+    let skipped = 0;
+
+    for (const dir of userDirs) {
+      const uinMatch = dir.match(/^(\d+)/);
+      if (!uinMatch) continue;
+      const uin = Number(uinMatch[1]);
+      const progressFile = join(progressDir, `${uin}.json`);
+
+      if (existsSync(progressFile) && !opts.overwrite) {
+        skipped++;
+        continue;
+      }
+
+      const dataDir = join(rootDir, dir, 'data');
+      const store = new ProgressStore({ outputRoot: rootDir, uin, name: dir });
+      store.load();
+
+      for (const mod of Object.keys(MODULE_FILE_MAP)) {
+        const filePath = join(dataDir, MODULE_FILE_MAP[mod]);
+        if (!existsSync(filePath)) continue;
+        try {
+          const data = JSON.parse(readFileSync(filePath, 'utf8'));
+          const items = Array.isArray(data) ? data : (data?.items || []);
+          const count = items.length;
+          if (count > 0) {
+            store.setModule(mod, {
+              status: STATUSES.DONE,
+              fetched: count,
+              totalReported: count,
+              lastPage: 999,
+            });
+
+            if (ENRICHABLE_MODULES.includes(mod)) {
+              const hasComments = items.some((it: any) =>
+                it.custom_comments?.length > 0 || it.comments?.length > 0
+              );
+              const hasLikes = items.some((it: any) =>
+                it.likes?.length > 0 || it.likenum > 0
+              );
+              store.setModule(mod, {
+                enrichment: {
+                  comments: hasComments ? 'done' : 'pending',
+                  likes: hasLikes ? 'done' : 'pending',
+                },
+              });
+            }
+          }
+        } catch { /* skip corrupt files */ }
+      }
+
+      // Handle photos (albums)
+      const albumsFile = join(dataDir, 'photos', 'albums.json');
+      if (existsSync(albumsFile)) {
+        try {
+          const albums = JSON.parse(readFileSync(albumsFile, 'utf8'));
+          if (Array.isArray(albums) && albums.length > 0) {
+            store.setModule('photos', { status: STATUSES.DONE });
+            for (const album of albums) {
+              const albumFile = join(dataDir, 'photos', `${album.id}.json`);
+              if (existsSync(albumFile)) {
+                try {
+                  const photos = JSON.parse(readFileSync(albumFile, 'utf8'));
+                  store.setAlbum(album.id, {
+                    status: STATUSES.DONE,
+                    fetched: Array.isArray(photos) ? photos.length : 0,
+                    totalReported: album.total || (Array.isArray(photos) ? photos.length : 0),
+                    lastPage: 999,
+                  });
+                } catch {}
+              }
+            }
+          }
+        } catch {}
+      }
+
+      store.setOverall(STATUSES.DONE);
+      store.flush(true);
+      created++;
+      console.log(`[${created}] ${dir}: progress generated`);
+    }
+
+    console.log(`\nDone: ${created} created, ${skipped} skipped (existing)`);
+  });
+
+program
+  .command('dedup-dirs')
+  .description('Merge duplicate user directories (same QQ, different nicknames) using remark-first naming')
+  .argument('<root>', 'Root directory containing user dirs (e.g., ./qzone-backup)')
+  .option('--friends <path>', 'Path to friends.json for remark lookup')
+  .option('--dry-run', 'Preview changes without executing', false)
+  .action(async (root: string, opts: { friends?: string; dryRun: boolean }) => {
+    const rootDir = resolve(root);
+    if (!existsSync(rootDir)) {
+      console.error(`Root not found: ${rootDir}`);
+      process.exit(1);
+    }
+
+    // Build uin → correct name from friends.json (remark > name)
+    const nameMap = new Map<string, string>();
+    const friendsPaths: string[] = [];
+
+    if (opts.friends) {
+      friendsPaths.push(resolve(opts.friends));
+    } else {
+      // Auto-discover: scan all user dirs for friends.json
+      const dirs = readdirSync(rootDir).filter(d => {
+        if (d.startsWith('.')) return false;
+        const fp = join(rootDir, d, 'data', 'friends.json');
+        return existsSync(fp);
+      });
+      for (const d of dirs) {
+        friendsPaths.push(join(rootDir, d, 'data', 'friends.json'));
+      }
+    }
+
+    for (const fp of friendsPaths) {
+      try {
+        const friends = JSON.parse(readFileSync(fp, 'utf8'));
+        const items = Array.isArray(friends) ? friends : (friends?.items || []);
+        for (const f of items) {
+          const uin = String(f.uin || f.fuin || '');
+          if (!uin) continue;
+          const correctName = (f.remark && f.remark.trim()) || f.name || uin;
+          if (!nameMap.has(uin)) {
+            nameMap.set(uin, correctName);
+          } else {
+            const existing = nameMap.get(uin)!;
+            if (f.remark && f.remark.trim() && existing === f.name) {
+              nameMap.set(uin, correctName);
+            }
+          }
+        }
+      } catch {}
+    }
+    console.log(`Loaded name mapping for ${nameMap.size} friends`);
+
+    // Group directories by QQ number
+    const allDirs = readdirSync(rootDir).filter(d => {
+      if (d.startsWith('.')) return false;
+      return statSync(join(rootDir, d)).isDirectory();
+    });
+
+    const groups = new Map<string, string[]>();
+    for (const d of allDirs) {
+      const m = d.match(/^(\d+)_/);
+      if (!m) continue;
+      const uin = m[1];
+      if (!groups.has(uin)) groups.set(uin, []);
+      groups.get(uin)!.push(d);
+    }
+
+    const { mergeByIds } = require('../engine/collectors/_util.js');
+
+    const MODULE_FILES = [
+      'messages.json', 'blogs.json', 'boards.json', 'friends.json',
+      'videos.json', 'diaries.json', 'favorites.json', 'shares.json', 'visitors.json',
+    ];
+    const MODULE_NAMES: Record<string, string> = {
+      'messages.json': 'messages', 'blogs.json': 'blogs', 'boards.json': 'boards',
+      'friends.json': 'friends', 'videos.json': 'videos', 'diaries.json': 'diaries',
+      'favorites.json': 'favorites', 'shares.json': 'shares', 'visitors.json': 'visitors',
+    };
+
+    let merged = 0;
+    let renamed = 0;
+    let unchanged = 0;
+
+    for (const [uin, dirs] of groups) {
+      const correctName = nameMap.get(uin) || null;
+      const correctFolder = correctName ? `${uin}_${sanitizeFilename(correctName)}` : null;
+
+      if (dirs.length === 1) {
+        // Single dir — just check if rename needed
+        if (correctFolder && dirs[0] !== correctFolder) {
+          const src = join(rootDir, dirs[0]);
+          const dst = join(rootDir, correctFolder);
+          if (opts.dryRun) {
+            console.log(`[rename] ${dirs[0]} → ${correctFolder}`);
+          } else {
+            if (!existsSync(dst)) {
+              const { renameSync } = await import('node:fs');
+              renameSync(src, dst);
+              console.log(`[rename] ${dirs[0]} → ${correctFolder}`);
+              renamed++;
+            }
+          }
+        } else {
+          unchanged++;
+        }
+        continue;
+      }
+
+      // Multiple dirs — merge data into target, remove others
+      const targetFolder = correctFolder || dirs[0];
+      const targetDir = join(rootDir, targetFolder);
+      const sourceDirs = dirs.filter(d => d !== targetFolder);
+
+      if (sourceDirs.length === 0 && dirs.includes(targetFolder)) {
+        unchanged++;
+        continue;
+      }
+
+      // If target folder doesn't exist yet (rename case), pick the best source to rename
+      if (!existsSync(targetDir)) {
+        // Pick the dir with the most data
+        let bestDir = dirs[0];
+        let bestSize = 0;
+        for (const d of dirs) {
+          const dataDir = join(rootDir, d, 'data');
+          if (!existsSync(dataDir)) continue;
+          let size = 0;
+          try {
+            for (const f of readdirSync(dataDir)) {
+              try { size += statSync(join(dataDir, f)).size; } catch {}
+            }
+          } catch {}
+          if (size > bestSize) { bestSize = size; bestDir = d; }
+        }
+
+        if (opts.dryRun) {
+          console.log(`[rename] ${bestDir} → ${targetFolder}`);
+        } else {
+          const { renameSync } = await import('node:fs');
+          renameSync(join(rootDir, bestDir), targetDir);
+          console.log(`[rename] ${bestDir} → ${targetFolder}`);
+        }
+        // Remove bestDir from sourceDirs
+        const idx = sourceDirs.indexOf(bestDir);
+        if (idx >= 0) sourceDirs.splice(idx, 1);
+        // Also remove from dirs that need to be merged as source
+        renamed++;
+      }
+
+      // Merge each source into target
+      for (const srcFolder of sourceDirs) {
+        const srcDir = join(rootDir, srcFolder);
+        const srcData = join(srcDir, 'data');
+        const dstData = join(targetDir, 'data');
+
+        if (!existsSync(srcData)) {
+          if (opts.dryRun) {
+            console.log(`[remove] ${srcFolder} (no data)`);
+          } else {
+            const { rmSync } = await import('node:fs');
+            rmSync(srcDir, { recursive: true, force: true });
+          }
+          continue;
+        }
+
+        if (opts.dryRun) {
+          console.log(`[merge] ${srcFolder} → ${targetFolder}`);
+          continue;
+        }
+
+        mkdirSync(dstData, { recursive: true });
+
+        // Merge JSON data files
+        for (const file of MODULE_FILES) {
+          const srcFile = join(srcData, file);
+          const dstFile = join(dstData, file);
+          if (!existsSync(srcFile)) continue;
+
+          try {
+            const srcRaw = JSON.parse(readFileSync(srcFile, 'utf8'));
+            const srcItems = Array.isArray(srcRaw) ? srcRaw : (srcRaw?.items || []);
+            if (srcItems.length === 0) continue;
+
+            if (!existsSync(dstFile)) {
+              writeFileSync(dstFile, readFileSync(srcFile, 'utf8'));
+              continue;
+            }
+
+            const dstRaw = JSON.parse(readFileSync(dstFile, 'utf8'));
+            const dstItems = Array.isArray(dstRaw) ? dstRaw : (dstRaw?.items || []);
+            const modName = MODULE_NAMES[file] || file.replace('.json', '');
+            const { merged: items, addedCount } = mergeByIds(dstItems, srcItems, modName);
+            if (addedCount > 0) {
+              const out = Array.isArray(dstRaw) ? items : { ...dstRaw, items };
+              writeFileSync(dstFile, JSON.stringify(out, null, 2), 'utf8');
+              console.log(`  ${file}: +${addedCount} from ${srcFolder}`);
+            }
+          } catch {}
+        }
+
+        // Merge photos
+        const srcPhotos = join(srcData, 'photos');
+        const dstPhotos = join(dstData, 'photos');
+        if (existsSync(srcPhotos)) {
+          mkdirSync(dstPhotos, { recursive: true });
+          for (const pf of readdirSync(srcPhotos).filter(f => f.endsWith('.json'))) {
+            const sp = join(srcPhotos, pf);
+            const dp = join(dstPhotos, pf);
+            if (!existsSync(dp)) {
+              writeFileSync(dp, readFileSync(sp, 'utf8'));
+              continue;
+            }
+            try {
+              const srcArr = JSON.parse(readFileSync(sp, 'utf8'));
+              const dstArr = JSON.parse(readFileSync(dp, 'utf8'));
+              if (!Array.isArray(srcArr) || !Array.isArray(dstArr)) continue;
+              const modName = pf === 'albums.json' ? 'albums' : 'photos';
+              const { merged: items, addedCount } = mergeByIds(dstArr, srcArr, modName);
+              if (addedCount > 0) {
+                writeFileSync(dp, JSON.stringify(items, null, 2), 'utf8');
+              }
+            } catch {}
+          }
+        }
+
+        // Copy media (don't overwrite existing)
+        const srcMedia = join(srcDir, 'media');
+        const dstMedia = join(targetDir, 'media');
+        if (existsSync(srcMedia)) {
+          const copyMedia = (src: string, dst: string) => {
+            mkdirSync(dst, { recursive: true });
+            for (const entry of readdirSync(src)) {
+              const s = join(src, entry);
+              const d = join(dst, entry);
+              if (statSync(s).isDirectory()) {
+                copyMedia(s, d);
+              } else if (!existsSync(d)) {
+                const { copyFileSync } = require('node:fs');
+                copyFileSync(s, d);
+              }
+            }
+          };
+          copyMedia(srcMedia, dstMedia);
+        }
+
+        // Remove merged source
+        const { rmSync } = await import('node:fs');
+        rmSync(srcDir, { recursive: true, force: true });
+        console.log(`[merged+removed] ${srcFolder} → ${targetFolder}`);
+        merged++;
+      }
+    }
+
+    console.log(`\nDone: ${merged} merged, ${renamed} renamed, ${unchanged} unchanged`);
+  });
+
+program
+  .command('deploy-viewer')
+  .description('Copy viewer dist + inline JSON data into every user dir so it works on file:// protocol')
+  .argument('<root>', 'Root directory containing user dirs (e.g., ./qzone-backup)')
+  .option('--filter <substr>', 'Only deploy to dirs whose name includes this substring')
+  .action((root: string, opts: { filter?: string }) => {
+    const rootDir = resolve(root);
+    if (!existsSync(rootDir)) {
+      console.error(`Root directory not found: ${rootDir}`);
+      process.exit(1);
+    }
+
+    const userDirs = readdirSync(rootDir).filter(d => {
+      if (d.startsWith('.')) return false;
+      const full = join(rootDir, d);
+      if (!statSync(full).isDirectory()) return false;
+      if (!existsSync(join(full, 'data'))) return false;
+      if (opts.filter && !d.includes(opts.filter)) return false;
+      return true;
+    });
+
+    console.log(`Deploying viewer to ${userDirs.length} user dirs in ${rootDir}\n`);
+
+    let ok = 0;
+    let fail = 0;
+    for (const dir of userDirs) {
+      const userDir = join(rootDir, dir);
+      try {
+        embedViewer(userDir);
+        ok++;
+      } catch (e: any) {
+        console.error(`  [ERROR] ${dir}: ${e.message}`);
+        fail++;
+      }
+    }
+
+    console.log(`\nDeploy complete: ${ok} ok, ${fail} failed, ${userDirs.length} total`);
   });
 
 program.parse();

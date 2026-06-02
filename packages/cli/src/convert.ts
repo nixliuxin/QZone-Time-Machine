@@ -35,9 +35,12 @@ import { join, resolve, basename, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import https from 'node:https';
 import http from 'node:http';
+import { createRequire } from 'node:module';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
+const require = createRequire(import.meta.url);
+const { mergeByIds } = require('../engine/collectors/_util.js');
 
 // ─── Utilities ───
 
@@ -66,6 +69,30 @@ function copyFlatDir(src: string, dest: string): number {
     count++;
   }
   return count;
+}
+
+/**
+ * Merge converted legacy items with existing backup data (if present).
+ * Backup items take priority (fresher, may have enrichment fields).
+ * Legacy items not found in backup are added (fills gaps from incomplete backups).
+ *
+ * @returns merged array, or just the converted items if no existing data
+ */
+function mergeWithExisting(outputFile: string, convertedItems: any[], moduleName: string): any[] {
+  if (!existsSync(outputFile)) return convertedItems;
+  try {
+    const existing = JSON.parse(readFileSync(outputFile, 'utf8'));
+    const base = Array.isArray(existing) ? existing : (existing?.items || []);
+    if (base.length === 0) return convertedItems;
+
+    const { merged, addedCount, duplicateCount } = mergeByIds(base, convertedItems, moduleName);
+    if (addedCount > 0 || duplicateCount > 0) {
+      console.log(`    merge: ${base.length} existing + ${addedCount} new from legacy (${duplicateCount} duplicates skipped)`);
+    }
+    return merged;
+  } catch {
+    return convertedItems;
+  }
 }
 
 // ─── Parse legacy .js files ───
@@ -207,12 +234,16 @@ function convertAlbums(sourceDir: string, outputDataDir: string, outputDir: stri
         comments: (p as Record<string, unknown>).comments as unknown[] | undefined,
         exif: p.exif,
       }));
-      writeFileSync(join(photosDir, `${album.id}.json`), JSON.stringify(photos, null, 2), 'utf8');
+      const albumFile = join(photosDir, `${album.id}.json`);
+      const mergedPhotos = mergeWithExisting(albumFile, photos, 'photos');
+      writeFileSync(albumFile, JSON.stringify(mergedPhotos, null, 2), 'utf8');
     }
   }
 
-  writeFileSync(join(photosDir, 'albums.json'), JSON.stringify(albumIndex, null, 2), 'utf8');
-  console.log(`  Albums: ${albumIndex.length} albums, ${albums.reduce((s, a) => s + (a.photoList?.length ?? 0), 0)} photos`);
+  const albumsFile = join(photosDir, 'albums.json');
+  const mergedAlbums = mergeWithExisting(albumsFile, albumIndex, 'albums');
+  writeFileSync(albumsFile, JSON.stringify(mergedAlbums, null, 2), 'utf8');
+  console.log(`  Albums: ${mergedAlbums.length} albums, ${albums.reduce((s, a) => s + (a.photoList?.length ?? 0), 0)} photos from legacy`);
 }
 
 function getAlbumCoverPath(album: LegacyAlbum & { custom_filepath?: string }, correctClass: string): string {
@@ -292,8 +323,10 @@ function convertMessages(sourceDir: string, outputDataDir: string, outputDir: st
     if (typeof msg.custom_content === 'string') collectTextEmojis(msg.custom_content);
   }
 
-  writeFileSync(join(outputDataDir, 'messages.json'), JSON.stringify(messages, null, 2), 'utf8');
-  console.log(`  Messages: ${messages.length} items`);
+  const outFile = join(outputDataDir, 'messages.json');
+  const merged = mergeWithExisting(outFile, messages, 'messages');
+  writeFileSync(outFile, JSON.stringify(merged, null, 2), 'utf8');
+  console.log(`  Messages: ${merged.length} items`);
 }
 
 // ─── Boards conversion (rewrite image paths) ───
@@ -326,9 +359,15 @@ function convertBoards(sourceDir: string, outputDataDir: string, outputDir: stri
     }
   }
 
-  writeFileSync(join(outputDataDir, 'boards.json'), JSON.stringify(data, null, 2), 'utf8');
-  const count = Array.isArray(data) ? data.length : 'object';
-  console.log(`  Boards: ${count} items`);
+  const outFile = join(outputDataDir, 'boards.json');
+  if (Array.isArray(data)) {
+    const merged = mergeWithExisting(outFile, data as any[], 'boards');
+    writeFileSync(outFile, JSON.stringify(merged, null, 2), 'utf8');
+    console.log(`  Boards: ${merged.length} items`);
+  } else {
+    writeFileSync(outFile, JSON.stringify(data, null, 2), 'utf8');
+    console.log(`  Boards: object`);
+  }
 }
 
 // ─── Blogs/Diaries conversion (base64 custom_html + media) ───
@@ -494,8 +533,10 @@ function convertBlogs(sourceDir: string, outputDataDir: string, outputDir: strin
     }
   }
 
-  writeFileSync(join(outputDataDir, 'blogs.json'), JSON.stringify(blogs, null, 2), 'utf8');
-  console.log(`  Blogs: ${blogs.length} items`);
+  const outFile = join(outputDataDir, 'blogs.json');
+  const merged = mergeWithExisting(outFile, blogs, 'blogs');
+  writeFileSync(outFile, JSON.stringify(merged, null, 2), 'utf8');
+  console.log(`  Blogs: ${merged.length} items`);
 }
 
 function convertDiaries(sourceDir: string, outputDataDir: string, outputDir: string): void {
@@ -518,8 +559,10 @@ function convertDiaries(sourceDir: string, outputDataDir: string, outputDir: str
     }
   }
 
-  writeFileSync(join(outputDataDir, 'diaries.json'), JSON.stringify(diaries, null, 2), 'utf8');
-  console.log(`  Diaries: ${diaries.length} items`);
+  const outFile = join(outputDataDir, 'diaries.json');
+  const merged = mergeWithExisting(outFile, diaries, 'diaries');
+  writeFileSync(outFile, JSON.stringify(merged, null, 2), 'utf8');
+  console.log(`  Diaries: ${merged.length} items`);
 }
 
 // ─── Visitors conversion (extract items from visitorInfo object) ───
@@ -544,10 +587,16 @@ function convertVisitors(sourceDir: string, outputDataDir: string, outputDir: st
     }
   }
 
-  writeFileSync(join(outputDataDir, 'visitors.json'), JSON.stringify(data, null, 2), 'utf8');
-  const count = Array.isArray(data) ? data.length : 0;
-  console.log(`  Visitors: ${count} items (total: ${officialTotal})`);
-  return officialTotal || count;
+  const outFile = join(outputDataDir, 'visitors.json');
+  if (Array.isArray(data)) {
+    const merged = mergeWithExisting(outFile, data as any[], 'visitors');
+    writeFileSync(outFile, JSON.stringify(merged, null, 2), 'utf8');
+    console.log(`  Visitors: ${merged.length} items (total: ${officialTotal})`);
+    return officialTotal || merged.length;
+  }
+  writeFileSync(outFile, JSON.stringify(data, null, 2), 'utf8');
+  console.log(`  Visitors: 0 items (total: ${officialTotal})`);
+  return officialTotal;
 }
 
 // ─── Generic module with potential inline media ───
@@ -581,9 +630,16 @@ function convertModuleWithMedia(
     }
   }
 
-  writeFileSync(join(outputDataDir, outputFile), JSON.stringify(data, null, 2), 'utf8');
-  const count = Array.isArray(data) ? data.length : 'object';
-  console.log(`  ${module}: ${count} items`);
+  const outFile = join(outputDataDir, outputFile);
+  const moduleName = modLower;
+  if (Array.isArray(data)) {
+    const merged = mergeWithExisting(outFile, data as any[], moduleName);
+    writeFileSync(outFile, JSON.stringify(merged, null, 2), 'utf8');
+    console.log(`  ${module}: ${merged.length} items`);
+  } else {
+    writeFileSync(outFile, JSON.stringify(data, null, 2), 'utf8');
+    console.log(`  ${module}: object`);
+  }
 }
 
 // ─── Shared media path rewriter ───
@@ -645,9 +701,16 @@ function convertSimpleModule(
     data = (raw as Record<string, unknown>)[varName] ?? raw;
   }
 
-  writeFileSync(join(outputDataDir, outputFile), JSON.stringify(data, null, 2), 'utf8');
-  const count = Array.isArray(data) ? data.length : 'object';
-  console.log(`  ${module}: ${count} items`);
+  const outFile = join(outputDataDir, outputFile);
+  const moduleName = module.toLowerCase();
+  if (Array.isArray(data)) {
+    const merged = mergeWithExisting(outFile, data as any[], moduleName);
+    writeFileSync(outFile, JSON.stringify(merged, null, 2), 'utf8');
+    console.log(`  ${module}: ${merged.length} items`);
+  } else {
+    writeFileSync(outFile, JSON.stringify(data, null, 2), 'utf8');
+    console.log(`  ${module}: object`);
+  }
 }
 
 // ─── Main conversion for a single user ───

@@ -10,7 +10,7 @@
 'use strict';
 
 const path = require('path');
-const { writeData, readData, randomSleep } = require('./_util.js');
+const { writeData, readData, randomSleep, mergeByIds, buildIdSet } = require('./_util.js');
 const messagesApi = require('../api/messages.js');
 const { RateLimitError, EmptyDataError, NoAccessError, AuthInvalidError } =
   require('../client.js');
@@ -30,18 +30,30 @@ async function collectMessages({
   pageSize = 40,
   logger = console,
   pageLimit = 0,
+  incremental = false,
 }) {
   const all = [];
   let totalReported = 0;
   let consecutiveEmpty = 0;
   let rateLimited = false;
 
-  let startPage = (progress.module('messages').lastPage ?? -1) + 1;
-  if (startPage > 0) {
-    logger.info(`[messages] resuming from page ${startPage}`);
-  }
   const outFile = path.join(outputRoot, 'data', 'messages.json');
-  if (startPage > 0) {
+
+  // In incremental mode: load existing data and build ID set
+  let existingIds = null;
+  let existingItems = [];
+  if (incremental) {
+    const r = readData(outFile, logger);
+    if (r.ok && Array.isArray(r.value)) {
+      existingItems = r.value;
+      existingIds = buildIdSet(existingItems, 'messages');
+      logger.info(`[messages] incremental: ${existingItems.length} existing items, ${existingIds.size} unique IDs`);
+    }
+  }
+
+  let startPage = incremental ? 0 : (progress.module('messages').lastPage ?? -1) + 1;
+  if (!incremental && startPage > 0) {
+    logger.info(`[messages] resuming from page ${startPage}`);
     const r = readData(outFile, logger);
     if (r.ok && Array.isArray(r.value)) {
       all.push(...r.value);
@@ -53,6 +65,7 @@ async function collectMessages({
     }
   }
 
+  let hitExistingBoundary = false;
   const maxPage = pageLimit > 0 ? startPage + pageLimit : 10000;
   for (let page = startPage; page < maxPage; page++) {
     let json;
@@ -85,13 +98,45 @@ async function collectMessages({
       }
     } else {
       consecutiveEmpty = 0;
-      all.push(...list);
+
+      if (incremental && existingIds) {
+        const newItems = list.filter(it => !existingIds.has(String(it.tid)));
+        if (newItems.length === 0) {
+          logger.info(`[messages] page ${page}: all ${list.length} items already known, stopping incremental`);
+          hitExistingBoundary = true;
+          break;
+        }
+        if (newItems.length < list.length) {
+          logger.info(`[messages] page ${page}: ${newItems.length} new, ${list.length - newItems.length} known`);
+        }
+        all.push(...newItems);
+      } else {
+        all.push(...list);
+      }
+
       progress.markPageDone('messages', page, all.length, totalReported);
       writeData(outFile, all);
       logger.info(`[messages] page ${page}: +${list.length} => total ${all.length}/${totalReported || '?'}`);
       if (totalReported && all.length >= totalReported) break;
     }
     await randomSleep(PAGE_SLEEP_MS);
+  }
+
+  // In incremental mode, merge new items (all) with existing items
+  if (incremental && existingItems.length > 0 && all.length > 0) {
+    const { merged, addedCount } = mergeByIds(existingItems, all, 'messages');
+    logger.info(`[messages] incremental merge: ${addedCount} new items added to ${existingItems.length} existing`);
+    writeData(outFile, merged);
+    const status = rateLimited ? 'rate_limited' : 'done';
+    progress.finishModule('messages', status, rateLimited ? 'consecutive empty pages' : null);
+    return { status, total: totalReported || merged.length, fetched: merged.length, rateLimited, items: merged };
+  }
+
+  if (incremental && existingItems.length > 0 && all.length === 0) {
+    logger.info(`[messages] incremental: no new items found`);
+    const status = 'done';
+    progress.finishModule('messages', status);
+    return { status, total: totalReported || existingItems.length, fetched: existingItems.length, rateLimited: false, items: existingItems };
   }
 
   writeData(outFile, all);

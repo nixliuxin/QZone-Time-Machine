@@ -22,17 +22,17 @@ interface UserInfo {
 }
 
 const contentNavItems = [
-  { to: '/', label: '概览', icon: '📊', countKey: null, ownerOnly: false },
-  { to: '/messages', label: '说说', icon: '💬', countKey: 'messages', ownerOnly: false },
-  { to: '/blogs', label: '日志', icon: '📝', countKey: 'blogs', ownerOnly: false },
-  { to: '/photos', label: '相册', icon: '📷', countKey: 'photos', ownerOnly: false },
-  { to: '/videos', label: '视频', icon: '🎬', countKey: 'videos', ownerOnly: false },
-  { to: '/boards', label: '留言板', icon: '📮', countKey: 'boards', ownerOnly: false },
-  { to: '/diaries', label: '私密日记', icon: '📓', countKey: 'diaries', ownerOnly: true },
-  { to: '/visitors', label: '访客', icon: '👣', countKey: 'visitors', ownerOnly: false },
-  { to: '/friends', label: '好友', icon: '👥', countKey: 'friends', ownerOnly: true },
-  { to: '/favorites', label: '收藏', icon: '⭐', countKey: 'favorites', ownerOnly: false },
-  { to: '/shares', label: '分享', icon: '🔗', countKey: 'shares', ownerOnly: true },
+  { to: '/', label: '概览', icon: '📊', countKey: null },
+  { to: '/messages', label: '说说', icon: '💬', countKey: 'messages' },
+  { to: '/blogs', label: '日志', icon: '📝', countKey: 'blogs' },
+  { to: '/photos', label: '相册', icon: '📷', countKey: 'photos' },
+  { to: '/videos', label: '视频', icon: '🎬', countKey: 'videos' },
+  { to: '/boards', label: '留言板', icon: '📮', countKey: 'boards' },
+  { to: '/diaries', label: '私密日记', icon: '📓', countKey: 'diaries' },
+  { to: '/visitors', label: '访客', icon: '👣', countKey: 'visitors' },
+  { to: '/friends', label: '好友', icon: '👥', countKey: 'friends' },
+  { to: '/favorites', label: '收藏', icon: '⭐', countKey: 'favorites' },
+  { to: '/shares', label: '分享', icon: '🔗', countKey: 'shares' },
 ] as const;
 
 const utilNavItems = [
@@ -102,12 +102,9 @@ export function Layout() {
 
         {/* Content modules */}
         <nav className="flex-1 overflow-y-auto py-2">
-          {contentNavItems.map(({ to, label, icon, countKey, ownerOnly }) => {
+          {contentNavItems.map(({ to, label, icon, countKey }) => {
             const count = getCount(countKey);
-            // Owner-only modules: hide if their count field doesn't exist in user.json
-            if (ownerOnly && user && count === undefined) return null;
-            // Non-owner modules: hide if count field exists and is 0
-            if (!ownerOnly && countKey && user && count !== undefined && count <= 0) return null;
+            if (countKey && user && (!count || count <= 0)) return null;
             return (
               <NavLink
                 key={to}

@@ -109,6 +109,26 @@
 2. **说说 likes** — 确认是否为用户隐私设置导致空返回（换用其他用户测试）
 3. **照片 comments** — 已修复 enricher 接入，需实际运行验证
 
+## 唯一 ID 字段（用于增量同步与合并去重）
+
+| 模块 | ID 字段 | 说明 |
+|------|---------|------|
+| Messages | `tid` | 每条说说的唯一 ID |
+| Blogs | `blogId` / `blogid` | 日志 ID |
+| Boards | `id` | 留言 ID |
+| Diaries | `blogid` | 日记 ID（同日志体系） |
+| Shares | `id` | 分享 ID |
+| Videos | `vid` / `video_id` / `id` | 视频 ID（多字段兼容） |
+| Favorites | `id` | 收藏 ID |
+| Visitors | `uin` + `time` | 组合键（访客 QQ + 访问时间） |
+| Friends | `uin` | 好友 QQ 号 |
+| Photos | `lloc` | 照片唯一标识 |
+| Albums | `id` | 相册 ID |
+
+这些 ID 被 `mergeByIds()` 工具函数和 `--incremental` 模式使用，确保：
+- 旧数据（legacy convert）与新数据（API backup）合并时不重复
+- 增量备份时自动检测已有内容边界并停止
+
 ## 图例
 
 - ✅ = 已实现且有数据

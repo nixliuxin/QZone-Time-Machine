@@ -215,7 +215,12 @@ async function enrichShareComments({ client, targetUin, items, logger = console 
  */
 async function enrichLikes({ client, items, buildKey, label = 'item', logger = console }) {
   let touched = 0;
+  let skipped = 0;
   for (const it of items) {
+    if (Array.isArray(it.likes) && it.likes.length > 0) {
+      skipped++;
+      continue;
+    }
     const unikey = buildKey(it);
     if (!unikey) continue;
     try {
@@ -229,7 +234,7 @@ async function enrichLikes({ client, items, buildKey, label = 'item', logger = c
     }
     if (touched % 20 === 0) await randomSleep(1000);
   }
-  if (touched) logger.info(`[enrich] ${label} like enrichment: ${touched} items`);
+  if (touched || skipped) logger.info(`[enrich] ${label} like enrichment: ${touched} fetched, ${skipped} already had likes`);
   return touched;
 }
 
@@ -246,6 +251,7 @@ async function enrichSingleVisitors({
 }) {
   let touched = 0;
   for (const it of items) {
+    if (it.custom_visitor && it.custom_visitor.list?.length > 0) continue;
     const targetId = targetIdOf(it);
     if (!targetId) continue;
     const collected = [];

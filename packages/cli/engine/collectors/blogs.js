@@ -6,7 +6,7 @@
 
 const path = require('path');
 const fs = require('fs');
-const { writeData, readData, randomSleep } = require('./_util.js');
+const { writeData, readData, randomSleep, mergeByIds, buildIdSet, getItemId } = require('./_util.js');
 const blogsApi = require('../api/blogs.js');
 const { NoAccessError, AuthInvalidError } = require('../client.js');
 
@@ -83,15 +83,28 @@ async function collectBlogs({
   logger = console,
   withDetail = true,
   pageLimit = 0,
+  incremental = false,
 }) {
   const all = [];
   let totalReported = 0;
   let consecutiveEmpty = 0;
   let rateLimited = false;
 
-  let startPage = (progress.module('blogs').lastPage ?? -1) + 1;
   const outFile = path.join(outputRoot, 'data', 'blogs.json');
-  if (startPage > 0) {
+
+  let existingIds = null;
+  let existingItems = [];
+  if (incremental) {
+    const r = readData(outFile, logger);
+    if (r.ok && Array.isArray(r.value)) {
+      existingItems = r.value;
+      existingIds = buildIdSet(existingItems, 'blogs');
+      logger.info(`[blogs] incremental: ${existingItems.length} existing items, ${existingIds.size} unique IDs`);
+    }
+  }
+
+  let startPage = incremental ? 0 : (progress.module('blogs').lastPage ?? -1) + 1;
+  if (!incremental && startPage > 0) {
     const r = readData(outFile, logger);
     if (r.ok && Array.isArray(r.value)) {
       all.push(...r.value);
@@ -134,7 +147,24 @@ async function collectBlogs({
       }
     } else {
       consecutiveEmpty = 0;
-      all.push(...list);
+
+      if (incremental && existingIds) {
+        const newItems = list.filter(it => {
+          const id = getItemId('blogs', it);
+          return id === undefined || !existingIds.has(String(id));
+        });
+        if (newItems.length === 0) {
+          logger.info(`[blogs] page ${page}: all ${list.length} items already known, stopping incremental`);
+          break;
+        }
+        if (newItems.length < list.length) {
+          logger.info(`[blogs] page ${page}: ${newItems.length} new, ${list.length - newItems.length} known`);
+        }
+        all.push(...newItems);
+      } else {
+        all.push(...list);
+      }
+
       progress.markPageDone('blogs', page, all.length, totalReported);
       writeData(outFile, all);
       logger.info(`[blogs] page ${page}: +${list.length} => total ${all.length}/${totalReported || '?'}`);
@@ -194,10 +224,23 @@ async function collectBlogs({
     }
   }
 
-  writeData(outFile, all);
+  // In incremental mode, merge new items with existing
+  let finalItems = all;
+  if (incremental && existingItems.length > 0) {
+    if (all.length > 0) {
+      const { merged, addedCount } = mergeByIds(existingItems, all, 'blogs');
+      logger.info(`[blogs] incremental merge: ${addedCount} new items added to ${existingItems.length} existing`);
+      finalItems = merged;
+    } else {
+      logger.info(`[blogs] incremental: no new items found`);
+      finalItems = existingItems;
+    }
+  }
+
+  writeData(outFile, finalItems);
   const status = rateLimited ? 'rate_limited' : 'done';
   progress.finishModule('blogs', status, rateLimited ? 'consecutive empty pages' : null);
-  return { status, total: totalReported, fetched: all.length, rateLimited, items: all };
+  return { status, total: totalReported || finalItems.length, fetched: finalItems.length, rateLimited, items: finalItems };
 }
 
 module.exports = { collectBlogs };

@@ -114,6 +114,94 @@ function randomSleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, actual));
 }
 
+/**
+ * ID field name for each data module.
+ * Used by mergeByIds, incremental fetch, and convert merge.
+ */
+const MODULE_ID_FIELDS = {
+  messages:  'tid',
+  blogs:     item => item.blogId || item.blogid,
+  boards:    'id',
+  diaries:   'blogid',
+  shares:    'id',
+  videos:    item => item.vid || item.video_id || item.id,
+  favorites: 'id',
+  visitors:  item => `${item.uin}_${item.time || item.pubtime || ''}`,
+  friends:   'uin',
+  photos:    'lloc',
+  albums:    'id',
+};
+
+/**
+ * Extract the unique ID from an item given its module name.
+ * @param {string} moduleName
+ * @param {object} item
+ * @returns {string|number|undefined}
+ */
+function getItemId(moduleName, item) {
+  const field = MODULE_ID_FIELDS[moduleName];
+  if (!field) return undefined;
+  if (typeof field === 'function') return field(item);
+  return item[field];
+}
+
+/**
+ * Merge two item arrays by unique ID.
+ *
+ * @param {Array} base      - items to keep when IDs collide (higher priority)
+ * @param {Array} incoming  - items to add if their ID is not in base
+ * @param {string} moduleName - module name (for ID field lookup)
+ * @param {object} [opts]
+ *   - sortField: field name to sort merged result by (descending), e.g. 'created_time'
+ * @returns {{ merged: Array, addedCount: number, duplicateCount: number }}
+ */
+function mergeByIds(base, incoming, moduleName, opts = {}) {
+  const seen = new Map();
+  for (const item of base) {
+    const id = getItemId(moduleName, item);
+    if (id !== undefined) seen.set(String(id), item);
+    else seen.set(`__idx_b_${seen.size}`, item);
+  }
+
+  let addedCount = 0;
+  let duplicateCount = 0;
+  for (const item of incoming) {
+    const id = getItemId(moduleName, item);
+    const key = id !== undefined ? String(id) : `__idx_i_${seen.size}`;
+    if (seen.has(key)) {
+      duplicateCount++;
+    } else {
+      seen.set(key, item);
+      addedCount++;
+    }
+  }
+
+  let merged = [...seen.values()];
+
+  if (opts.sortField) {
+    merged.sort((a, b) => {
+      const va = a[opts.sortField] || 0;
+      const vb = b[opts.sortField] || 0;
+      return vb - va;
+    });
+  }
+
+  return { merged, addedCount, duplicateCount };
+}
+
+/**
+ * Build a Set of known item IDs from an existing array.
+ * Used by incremental collectors to detect "already fetched" boundary.
+ */
+function buildIdSet(items, moduleName) {
+  const set = new Set();
+  for (const item of items) {
+    const id = getItemId(moduleName, item);
+    if (id !== undefined) set.add(String(id));
+  }
+  return set;
+}
+
 module.exports = {
   ensureDir,
   writeData,
@@ -124,4 +212,8 @@ module.exports = {
   extFromUrl,
   preferOriginal,
   randomSleep,
+  MODULE_ID_FIELDS,
+  getItemId,
+  mergeByIds,
+  buildIdSet,
 };

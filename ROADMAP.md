@@ -31,9 +31,12 @@
 ## 备份引擎增强
 
 ### 增量同步
-- [ ] 基于唯一 ID（`tid` / `blogId` / `id`）去重 merge，而非分页偏移
-- [ ] 从 page 0 拉取直到遇到已有数据自动停止
-- [ ] 支持定期增量备份（只拉取新增/变化的内容）
+- [x] 基于唯一 ID（`tid` / `blogId` / `id`）去重 merge，而非分页偏移
+- [x] 从 page 0 拉取直到遇到已有数据自动停止
+- [x] 支持定期增量备份（`--incremental` 只拉取新增内容）
+- [x] `mergeByIds` 通用合并工具（用于 convert 旧数据迁移 + 增量备份）
+- [x] `generate-progress` 命令：为已转换数据生成合成进度文件
+- [x] Enricher 幂等性：已有 comments/likes 的条目自动跳过
 
 ### 批量备份优化
 - [ ] `backup-all` 支持 `--resume-from <uin>` 从指定用户继续

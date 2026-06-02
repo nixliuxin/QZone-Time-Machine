@@ -37,19 +37,46 @@ export function formatDateShort(val: string | number | undefined | null): string
   return '';
 }
 
+const QQ_EMOJI: Record<string, string> = {
+  e100:'😊',e101:'😖',e102:'😍',e103:'😳',e104:'😎',e105:'😭',e106:'☺️',
+  e107:'🤐',e108:'😴',e109:'😢',e110:'😰',e111:'😡',e112:'😜',e113:'😬',
+  e114:'😲',e115:'😞',e116:'🆒',e117:'😰',e118:'😱',e119:'🤮',e120:'🤭',
+  e121:'😊',e122:'🙄',e123:'😤',e124:'😋',e125:'😪',e126:'😨',e127:'😅',
+  e128:'😄',e129:'🪖',e130:'💪',e131:'🤬',e132:'❓',e133:'🤫',e134:'😵',
+  e135:'😩',e136:'💀',e137:'💀',e138:'👊',e139:'👋',e140:'😰',e141:'🤏',
+  e142:'👏',e143:'😳',e144:'😏',e145:'😒',e146:'😒',e147:'🥱',e148:'😤',
+  e149:'😢',e150:'😭',e151:'😈',e152:'😘',e153:'😨',e154:'🥺',e155:'🔪',
+  e156:'🍉',e157:'🍺',e158:'🏀',e159:'🏓',e160:'☕',e161:'🍚',e162:'🐷',
+  e163:'🌹',e164:'🥀',e165:'💋',e166:'❤️',e167:'💔',e168:'🎂',e169:'⚡',
+  e170:'💣',e171:'🔪',e172:'⚽',e173:'🐞',e174:'💩',e175:'🌙',e176:'☀️',
+  e177:'🎁',e178:'🤗',e179:'👍',e180:'👎',e181:'🤝',e182:'✌️',e183:'🤛',
+  e184:'☝️',e185:'✊',e186:'🤏',e187:'🤟',e188:'❌',e189:'✅',e190:'❤️',
+  e191:'💋',e192:'🤸',e193:'😰',e194:'😤',e195:'🔄',e196:'🙇',e197:'🏃',
+  e198:'🙈',e199:'💊',
+};
+
 /**
- * Convert QQ [em]eXXXXXX[/em] emotion codes to img tags.
- * QQ emotions use IDs from e100 to e500000+.
- * We map to a CDN URL or local fallback.
+ * Convert QQ [em]eXXX[/em] emotion codes to emoji or img tags.
+ * Uses Unicode emoji for the classic set (e100-e199).
+ * For extended sticker IDs, tries local gif then falls back to placeholder.
  */
 export function formatQQContent(text: string): string {
   if (!text) return '';
-  return text.replace(
-    /\[em\](e\d+)\[\/em\]/g,
-    (_match, code: string) => {
-      return `<img class="qq-emoji" src="media/emoji/${code}.gif" alt="[${code}]" onerror="this.style.display='none';this.insertAdjacentText('afterend','[${code}]')" />`;
-    }
-  );
+  let result = text
+    .replace(
+      /\[em\](e\d+)\[\/em\]/g,
+      (_match, code: string) => {
+        const unicode = QQ_EMOJI[code];
+        if (unicode) return `<span class="qq-emoji" title="[${code}]">${unicode}</span>`;
+        return `<img class="qq-emoji" src="media/emoji/${code}.gif" alt="[${code}]" onerror="this.style.display='none';this.insertAdjacentText('afterend','[sticker]')" />`;
+      }
+    )
+    .replace(
+      /@\{uin:(\d+),nick:([^,}]+),who:\d+\}/g,
+      (_m, uin: string, nick: string) =>
+        `<a class="qq-mention" href="https://user.qzone.qq.com/${uin}" target="_blank" rel="noopener" title="QQ ${uin}">@${nick}</a>`
+    );
+  return result;
 }
 
 /**

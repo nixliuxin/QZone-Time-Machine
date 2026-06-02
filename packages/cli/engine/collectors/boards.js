@@ -6,7 +6,7 @@
 
 const path = require('path');
 const fs = require('fs');
-const { writeData, readData, randomSleep } = require('./_util.js');
+const { writeData, readData, randomSleep, mergeByIds, buildIdSet } = require('./_util.js');
 const boardsApi = require('../api/boards.js');
 const { NoAccessError, AuthInvalidError, RateLimitError } = require('../client.js');
 
@@ -21,15 +21,28 @@ async function collectBoards({
   pageSize = 20,
   logger = console,
   pageLimit = 0,
+  incremental = false,
 }) {
   const all = [];
   let totalReported = 0;
   let consecutiveEmpty = 0;
   let rateLimited = false;
 
-  let startPage = (progress.module('boards').lastPage ?? -1) + 1;
   const outFile = path.join(outputRoot, 'data', 'boards.json');
-  if (startPage > 0) {
+
+  let existingIds = null;
+  let existingItems = [];
+  if (incremental) {
+    const r = readData(outFile, logger);
+    if (r.ok && r.value) {
+      existingItems = Array.isArray(r.value) ? r.value : (r.value.items || []);
+      existingIds = buildIdSet(existingItems, 'boards');
+      logger.info(`[boards] incremental: ${existingItems.length} existing items, ${existingIds.size} unique IDs`);
+    }
+  }
+
+  let startPage = incremental ? 0 : (progress.module('boards').lastPage ?? -1) + 1;
+  if (!incremental && startPage > 0) {
     const r = readData(outFile, logger);
     if (r.ok && r.value && Array.isArray(r.value.items)) {
       all.push(...r.value.items);
@@ -78,7 +91,18 @@ async function collectBoards({
       }
     } else {
       consecutiveEmpty = 0;
-      all.push(...list);
+
+      if (incremental && existingIds) {
+        const newItems = list.filter(it => !existingIds.has(String(it.id)));
+        if (newItems.length === 0) {
+          logger.info(`[boards] page ${page}: all ${list.length} items already known, stopping incremental`);
+          break;
+        }
+        all.push(...newItems);
+      } else {
+        all.push(...list);
+      }
+
       progress.markPageDone('boards', page, all.length, totalReported);
       writeData(outFile, { items: all, total: totalReported });
       logger.info(`[boards] page ${page}: +${list.length} => total ${all.length}/${totalReported || '?'}`);
@@ -87,10 +111,21 @@ async function collectBoards({
     await randomSleep(PAGE_SLEEP_MS);
   }
 
-  writeData(outFile, { items: all, total: totalReported });
+  let finalItems = all;
+  if (incremental && existingItems.length > 0) {
+    if (all.length > 0) {
+      const { merged, addedCount } = mergeByIds(existingItems, all, 'boards');
+      logger.info(`[boards] incremental merge: ${addedCount} new items added to ${existingItems.length} existing`);
+      finalItems = merged;
+    } else {
+      finalItems = existingItems;
+    }
+  }
+
+  writeData(outFile, { items: finalItems, total: totalReported || finalItems.length });
   const status = rateLimited ? 'rate_limited' : 'done';
   progress.finishModule('boards', status, rateLimited ? 'consecutive empty pages' : null);
-  return { status, total: totalReported, fetched: all.length, rateLimited, items: all };
+  return { status, total: totalReported || finalItems.length, fetched: finalItems.length, rateLimited, items: finalItems };
 }
 
 module.exports = { collectBoards };

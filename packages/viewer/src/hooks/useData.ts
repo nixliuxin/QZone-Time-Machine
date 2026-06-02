@@ -38,6 +38,14 @@ export function useData<T>(path: string): { data: T | null; loading: boolean; er
       return;
     }
 
+    // If embedded mode is active but this key is missing, treat as empty
+    // rather than attempting a fetch (which fails on file:// protocol).
+    if (window.__QZONE_DATA__) {
+      setData(null);
+      setLoading(false);
+      return;
+    }
+
     // Priority 2: fetch from server (works with http:// protocol)
     const resolvedPath = new URL(path, window.location.href).href;
 

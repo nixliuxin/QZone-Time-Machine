@@ -39,7 +39,7 @@ function InfoPanel({ meta, src }: { meta?: LightboxMeta; src: string }) {
   if (!hasInfo) return null;
 
   return (
-    <div className="w-64 shrink-0 bg-black/60 border-l border-white/10 p-4 overflow-y-auto text-xs space-y-2">
+    <div className="w-64 shrink-0 bg-[hsl(var(--card))] border-l border-[hsl(var(--border))] p-4 overflow-y-auto text-xs space-y-2">
       {filename && <Row label="文件" value={filename} />}
       {dims && <Row label="尺寸" value={dims} />}
       {shoot && <Row label="拍摄" value={shoot} />}
@@ -52,8 +52,8 @@ function InfoPanel({ meta, src }: { meta?: LightboxMeta; src: string }) {
 function Row({ label, value }: { label: string; value: string }) {
   return (
     <div>
-      <span className="text-white/50">{label}</span>
-      <p className="text-white/90 break-words mt-0.5">{value}</p>
+      <span className="text-[hsl(var(--muted-foreground))]">{label}</span>
+      <p className="text-[hsl(var(--foreground))] break-words mt-0.5">{value}</p>
     </div>
   );
 }
@@ -103,13 +103,13 @@ export function Lightbox({ items, startIndex = 0, onClose }: LightboxProps) {
   return createPortal(
     <div
       data-lightbox
-      className="fixed inset-0 z-[9999] flex flex-col bg-black/90 animate-fade-in"
+      className="fixed inset-0 z-[9999] flex flex-col bg-[hsl(var(--background))]/95 backdrop-blur-sm animate-fade-in"
       onClick={onClose}
     >
       {/* Top bar */}
-      <div className="flex items-center justify-between px-4 py-3 text-white/80 text-sm shrink-0" onClick={(e) => e.stopPropagation()}>
+      <div className="flex items-center justify-between px-4 py-3 text-[hsl(var(--muted-foreground))] text-sm shrink-0 border-b border-[hsl(var(--border))]" onClick={(e) => e.stopPropagation()}>
         <span>{index + 1} / {items.length}</span>
-        <button onClick={onClose} className="w-8 h-8 flex items-center justify-center rounded-full hover:bg-white/10 text-xl">&times;</button>
+        <button onClick={onClose} className="w-8 h-8 flex items-center justify-center rounded-full hover:bg-[hsl(var(--accent))] text-[hsl(var(--foreground))] text-xl transition">&times;</button>
       </div>
 
       {/* Content: image + info panel */}
@@ -119,28 +119,28 @@ export function Lightbox({ items, startIndex = 0, onClose }: LightboxProps) {
           {hasPrev && (
             <button
               onClick={goPrev}
-              className="absolute left-2 top-1/2 -translate-y-1/2 w-10 h-10 flex items-center justify-center rounded-full bg-black/40 hover:bg-black/60 text-white text-xl transition"
+              className="absolute left-2 top-1/2 -translate-y-1/2 w-10 h-10 flex items-center justify-center rounded-full bg-[hsl(var(--muted))] hover:bg-[hsl(var(--accent))] text-[hsl(var(--foreground))] text-xl transition shadow-md"
             >&#8249;</button>
           )}
 
           <img
             src={item.src}
             alt=""
-            className={`max-h-full max-w-full object-contain rounded transition-opacity duration-200 ${loaded ? 'opacity-100' : 'opacity-0'}`}
+            className={`max-h-full max-w-full object-contain rounded-lg shadow-2xl transition-opacity duration-200 ${loaded ? 'opacity-100' : 'opacity-0'}`}
             onLoad={() => setLoaded(true)}
             draggable={false}
           />
 
           {!loaded && (
             <div className="absolute inset-0 flex items-center justify-center">
-              <div className="w-8 h-8 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+              <div className="w-8 h-8 border-2 border-[hsl(var(--muted-foreground))]/30 border-t-[hsl(var(--foreground))] rounded-full animate-spin" />
             </div>
           )}
 
           {hasNext && (
             <button
               onClick={goNext}
-              className="absolute right-2 top-1/2 -translate-y-1/2 w-10 h-10 flex items-center justify-center rounded-full bg-black/40 hover:bg-black/60 text-white text-xl transition"
+              className="absolute right-2 top-1/2 -translate-y-1/2 w-10 h-10 flex items-center justify-center rounded-full bg-[hsl(var(--muted))] hover:bg-[hsl(var(--accent))] text-[hsl(var(--foreground))] text-xl transition shadow-md"
             >&#8250;</button>
           )}
         </div>
@@ -152,7 +152,7 @@ export function Lightbox({ items, startIndex = 0, onClose }: LightboxProps) {
       {/* Caption area */}
       {item.caption && (
         <div
-          className="shrink-0 px-6 py-3 text-white/70 text-sm text-center max-h-32 overflow-y-auto"
+          className="shrink-0 px-6 py-3 text-[hsl(var(--muted-foreground))] text-sm text-center max-h-32 overflow-y-auto border-t border-[hsl(var(--border))]"
           onClick={(e) => e.stopPropagation()}
         >
           {item.caption}
