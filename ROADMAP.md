@@ -39,6 +39,10 @@
 - [x] Enricher 幂等性：已有 comments/likes 的条目自动跳过
 
 ### 批量备份优化
+- [x] `check-access` 命令：探测每位好友空间状态（accessible / no_permission / not_activated），写入状态 JSON
+- [x] `backup-all --access-file` 可选项：按状态文件跳过不可访问的目标（省时、降低封号风险）
+- [x] `backup-all` 自动将本人（owner）置顶加入备份列表，不遗漏自己
+- [x] 备份时记录 owner 身份（`meta.json` + `user.json` 的 `owner_uin`/`is_owner`），供 viewer 精确判断 owner-only 模块
 - [ ] `backup-all` 支持 `--resume-from <uin>` 从指定用户继续
 - [ ] 限流自适应退避（动态调整请求间隔）
 - [ ] 加密相册检测与标记（避免下载占位图）

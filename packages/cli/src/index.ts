@@ -253,6 +253,31 @@ program
       const realName = u.info?.name || u.info?.nickname || name;
       progress.state.name = realName;
 
+      // Record owner identity so the viewer can accurately decide module
+      // visibility (owner-only modules like friends/shares/diaries) and so we
+      // always know whose session produced this archive.
+      const ownerUin = Number(session.uin);
+      const isOwner = ownerUin === Number(targetUin);
+      try {
+        writeFileSync(join(userDir, 'meta.json'), JSON.stringify({
+          source: 'backup',
+          uin: Number(targetUin),
+          nickname: realName,
+          owner_uin: ownerUin,
+          is_owner: isOwner,
+          backedUpAt: new Date().toISOString(),
+        }, null, 2), 'utf8');
+        const userJsonPath = join(userDir, 'data', 'user.json');
+        if (existsSync(userJsonPath)) {
+          const uj = JSON.parse(readFileSync(userJsonPath, 'utf8'));
+          uj.owner_uin = ownerUin;
+          uj.is_owner = isOwner;
+          writeFileSync(userJsonPath, JSON.stringify(uj, null, 2), 'utf8');
+        }
+      } catch (e: any) {
+        logger.warn(`Failed to write owner meta: ${e.message}`);
+      }
+
       // 2) Messages
       const m = await runModule('messages', () =>
         collectMessages({ client, targetUin, outputRoot: userDir, progress, logger, pageLimit: samplePages, incremental })
@@ -590,6 +615,7 @@ program
   .option('--skip <uins>', 'Comma-separated UINs to skip')
   .option('--sample <pages>', 'Sample mode: limit pages per module', '0')
   .option('--incremental', 'Only fetch new items (ID-based dedup)', false)
+  .option('--access-file <path>', 'Optional access_status.json (from check-access): skip inaccessible targets')
   .action(async (opts) => {
     const dataDir = resolve(opts.dataDir);
     const cookiesFile = join(dataDir, 'cookies.json');
@@ -619,10 +645,46 @@ program
     const skipSet = new Set((opts.skip || '').split(',').map((s: string) => s.trim()).filter(Boolean));
     const dailyLimit = parseInt(opts.dailyLimit, 10) || 0;
 
+    // Optional: load an access-status file (from `check-access` or the legacy
+    // friends_with_access.json) and skip targets that are not accessible.
+    const inaccessibleSet = new Set<string>();
+    if (opts.accessFile) {
+      const accPath = resolve(opts.accessFile);
+      if (!existsSync(accPath)) {
+        console.error(`Access file not found: ${accPath}`);
+        process.exit(1);
+      }
+      try {
+        const parsed = JSON.parse(readFileSync(accPath, 'utf8'));
+        const list = Array.isArray(parsed) ? parsed : (parsed.results || []);
+        for (const r of list) {
+          const uin = String(r.uin ?? r.fuin ?? '');
+          if (!uin) continue;
+          const inaccessible = r.status
+            ? (r.status === 'no_permission' || r.status === 'not_activated')
+            : (r.access === false);
+          if (inaccessible) inaccessibleSet.add(uin);
+        }
+        logger.info(`Access filter: ${inaccessibleSet.size} inaccessible targets will be skipped (from ${basename(accPath)})`);
+      } catch (e: any) {
+        console.error(`Failed to parse access file: ${e.message}`);
+        process.exit(1);
+      }
+    }
+
     logger.info('Fetching friends list...');
     const friendsJson = await getFriends({ client, targetUin: session.uin });
     const items = friendsJson?.data?.items || friendsJson?.items || [];
-    logger.info(`Found ${items.length} friends (skipping ${skipSet.size})`);
+
+    // Always include the owner's own space first, even if not in the friends
+    // list, so backup-all never misses self.
+    const ownerUin = Number(session.uin);
+    const hasSelf = items.some((f: any) => Number(f.uin || f.fuin) === ownerUin);
+    if (!hasSelf && ownerUin) {
+      items.unshift({ uin: ownerUin, name: '我', remark: '' });
+      logger.info(`Prepended owner self (${ownerUin}) to backup list`);
+    }
+    logger.info(`Found ${items.length} targets (${hasSelf ? 'self in friends' : 'self prepended'}, skipping ${skipSet.size})`);
     if (dailyLimit > 0) {
       logger.info(`Daily limit: ${dailyLimit} users per run`);
     }
@@ -650,6 +712,10 @@ program
 
       if (skipSet.has(String(uin))) {
         logger.info(`[${i + 1}/${items.length}] SKIP ${uin} (${name})`);
+        continue;
+      }
+      if (inaccessibleSet.has(String(uin))) {
+        logger.info(`[${i + 1}/${items.length}] SKIP ${uin} (${name}) - inaccessible per access file`);
         continue;
       }
 
@@ -1126,6 +1192,87 @@ program
     }
 
     console.log(`\nDeploy complete: ${ok} ok, ${fail} failed, ${userDirs.length} total`);
+  });
+
+program
+  .command('check-access')
+  .description('Probe every friend\'s QZone status (accessible / no_permission / not_activated) and write a status JSON')
+  .option('-d, --data-dir <dir>', 'Auth data directory', '.')
+  .option('-o, --output <file>', 'Output JSON path', './access_status.json')
+  .option('--delay <ms>', 'Base delay between probes (ms)', '1200')
+  .option('--resume', 'Skip targets already present in the output file', false)
+  .action(async (opts: { dataDir: string; output: string; delay: string; resume: boolean }) => {
+    const dataDir = resolve(opts.dataDir);
+    const session = new Session({ cookiesFile: join(dataDir, 'cookies.json'), authFile: join(dataDir, 'auth.json') });
+    session.load();
+    if (!session.looksValid()) {
+      console.error('Session expired. Please run "qzone-tools login" or "qzone-tools import-cookies" first.');
+      process.exit(1);
+    }
+
+    const client = new QzoneClient({ session, config: { dataDir } });
+    const logger = makeLogger('check-access');
+    const { getFriends } = require('../engine/api/friends.js');
+    const { probeAccess } = require('../engine/api/access.js');
+
+    logger.info('Fetching friends list...');
+    const friendsJson = await getFriends({ client, targetUin: session.uin });
+    const items = friendsJson?.data?.items || friendsJson?.items || [];
+    const ownerUin = Number(session.uin);
+    if (!items.some((f: any) => Number(f.uin || f.fuin) === ownerUin) && ownerUin) {
+      items.unshift({ uin: ownerUin, name: '我', remark: '' });
+    }
+    logger.info(`Probing ${items.length} targets...`);
+
+    const outFile = resolve(opts.output);
+    const baseDelay = parseInt(opts.delay, 10) || 1200;
+
+    // Load existing results for resume.
+    const byUin: Record<string, any> = {};
+    if (opts.resume && existsSync(outFile)) {
+      try {
+        const prev = JSON.parse(readFileSync(outFile, 'utf8'));
+        for (const r of (prev.results || [])) byUin[String(r.uin)] = r;
+        logger.info(`Resume: ${Object.keys(byUin).length} targets already probed`);
+      } catch { /* ignore */ }
+    }
+
+    const stats: Record<string, number> = {};
+    let n = 0;
+    for (const f of items) {
+      const uin = Number(f.uin || f.fuin);
+      const name = f.remark || f.name || String(uin);
+      n++;
+      if (opts.resume && byUin[String(uin)]) {
+        const s = byUin[String(uin)].status;
+        stats[s] = (stats[s] || 0) + 1;
+        continue;
+      }
+      try {
+        const r = await probeAccess(client, uin);
+        r.name = name;
+        byUin[String(uin)] = r;
+        stats[r.status] = (stats[r.status] || 0) + 1;
+        logger.info(`[${n}/${items.length}] ${uin} (${name}): ${r.status}${r.code ? ` code=${r.code}` : ''}`);
+      } catch (e: any) {
+        if (e instanceof AuthInvalidError) {
+          logger.error('Session expired mid-run. Saving partial results and stopping.');
+          break;
+        }
+        byUin[String(uin)] = { uin, name, status: 'error', code: null, message: e.message, checkedAt: new Date().toISOString() };
+        stats.error = (stats.error || 0) + 1;
+      }
+      // Persist incrementally so a crash/ban doesn't lose progress.
+      if (n % 10 === 0) {
+        writeFileSync(outFile, JSON.stringify({ generatedAt: new Date().toISOString(), owner: ownerUin, results: Object.values(byUin) }, null, 2), 'utf8');
+      }
+      const wait = Math.round(baseDelay * (0.6 + Math.random() * 0.8));
+      await new Promise((r) => setTimeout(r, wait));
+    }
+
+    writeFileSync(outFile, JSON.stringify({ generatedAt: new Date().toISOString(), owner: ownerUin, results: Object.values(byUin) }, null, 2), 'utf8');
+    logger.info(`\nDone. Status JSON written to ${outFile}`);
+    logger.info(`Summary: ${Object.entries(stats).map(([k, v]) => `${k}=${v}`).join(' ')}`);
   });
 
 program.parse();
