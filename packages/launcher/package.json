@@ -1,0 +1,30 @@
+{
+  "name": "@qzone-tools/launcher",
+  "version": "0.1.0",
+  "description": "Zero-install local launcher: serves a packed QZone archive (store-mode zips) to the browser",
+  "type": "module",
+  "bin": {
+    "qzone-launcher": "./dist/main.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "node --import tsx src/main.ts",
+    "bundle": "esbuild src/main.ts --bundle --platform=node --format=cjs --target=node20 --outfile=build/launcher.cjs",
+    "exe": "node scripts/build-exe.mjs"
+  },
+  "dependencies": {
+    "yauzl": "^3.2.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/yauzl": "^2.10.3",
+    "esbuild": "^0.24.0",
+    "postject": "1.0.0-alpha.6",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "license": "MIT"
+}

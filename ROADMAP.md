@@ -49,6 +49,15 @@
 
 ---
 
+## 打包与启动器
+
+- [x] `pack` 命令：每用户打包为 store 模式 zip + 生成 `_manifest.json`（云同步友好，对象数从数万降到「每人 1 zip」）
+- [x] 免安装启动器（`packages/launcher`）：本地服务 + 全员列表首页 + 从 zip 流式读取媒体（HTTP Range）
+- [x] Node SEA 编译为单文件 exe（无需安装 Node，双击即用，自动识别所在目录）
+- [ ] 启动器首页增强：分组/标签筛选、按内容量排序切换
+- [ ] 代码签名（消除 Windows SmartScreen 警告）
+- [ ] macOS / Linux 启动器构建
+
 ## 独立桌面应用
 
 - [ ] 打包为独立桌面 App（Electron / Tauri），用户无需安装 Node.js 或了解命令行

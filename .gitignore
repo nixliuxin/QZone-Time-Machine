@@ -22,3 +22,5 @@ Thumbs.db
 
 # Build
 *.tsbuildinfo
+packages/launcher/build/
+packages/launcher/dist-exe/

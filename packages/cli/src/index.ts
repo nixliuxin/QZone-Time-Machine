@@ -1275,4 +1275,20 @@ program
     logger.info(`Summary: ${Object.entries(stats).map(([k, v]) => `${k}=${v}`).join(' ')}`);
   });
 
+program
+  .command('pack')
+  .description('Pack each user dir into a store-mode zip (cloud-sync friendly) + generate _manifest.json for the launcher')
+  .argument('<root>', 'Root directory containing user dirs (e.g., ./qzone-backup)')
+  .option('-o, --out <dir>', 'Output directory for the packed zips (default: <root>_packed)')
+  .option('--filter <substr>', 'Only pack dirs whose name includes this substring')
+  .option('--skip-existing', 'Skip users whose zip already exists in the output dir', false)
+  .action(async (root: string, opts: { out?: string; filter?: string; skipExisting?: boolean }) => {
+    const { packArchive } = await import('./pack.js');
+    const rootAbs = resolve(root);
+    const out = opts.out ? resolve(opts.out) : `${rootAbs.replace(/[\\/]+$/, '')}_packed`;
+    const logger = makeLogger('pack');
+    const r = await packArchive({ root: rootAbs, out, filter: opts.filter, skipExisting: opts.skipExisting, logger });
+    logger.info(`Done. ${r.packed} packed, ${r.skipped} skipped, ${r.failed} failed. Output: ${out}`);
+  });
+
 program.parse();
