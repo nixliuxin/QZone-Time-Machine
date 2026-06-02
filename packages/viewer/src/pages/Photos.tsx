@@ -153,29 +153,37 @@ export function PhotoAlbumDetail() {
       ) : !photos?.length ? (
         <div className="text-[hsl(var(--muted-foreground))]">此相册为空</div>
       ) : (
-        <PhotoGrid photos={photos} albumId={albumId!} />
+        <PhotoGrid photos={photos} albumId={albumId!} albumName={albumName} />
       )}
     </div>
   );
 }
 
-function PhotoGrid({ photos, albumId }: { photos: Photo[]; albumId: string }) {
+function PhotoGrid({ photos, albumId, albumName }: { photos: Photo[]; albumId: string; albumName?: string }) {
   const { paged: pagedPhotos, currentPage, totalPages, total: photoTotal, setPage, pageSize } = usePagination(photos, 60);
   const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
 
   const pageOffset = (currentPage - 1) * pageSize;
 
-  const lightboxItems: LightboxItem[] = useMemo(() => photos.map((p) => ({
-    src: p.url || p.custom_filepath || p.custom_url || '',
-    meta: {
-      filename: p.custom_filename || p.name || '',
-      width: p.origin_width || p.width,
-      height: p.origin_height || p.height,
-      uploadtime: p.uploadtime,
-      shoottime: p.shoottime,
-      location: p.poiName,
-    },
-  })), [photos]);
+  const lightboxItems: LightboxItem[] = useMemo(() => photos.map((p) => {
+    const src = p.url || p.custom_filepath || p.custom_url || '';
+    return {
+      src,
+      thumb: p.custom_filepath || src,
+      meta: {
+        filename: p.custom_filename || p.name || src.split('/').pop() || '',
+        width: p.origin_width || p.width,
+        height: p.origin_height || p.height,
+        uploadtime: p.uploadtime,
+        shoottime: p.shoottime,
+        location: p.poiName,
+        desc: p.desc && p.desc !== p.name ? p.desc : undefined,
+        filesize: p.photocubage,
+        exif: p.exif,
+        comments: p.comments,
+      },
+    };
+  }), [photos]);
 
   return (
     <>
@@ -186,7 +194,7 @@ function PhotoGrid({ photos, albumId }: { photos: Photo[]; albumId: string }) {
       </div>
       <Pagination currentPage={currentPage} totalPages={totalPages} total={photoTotal} pageSize={pageSize} onPageChange={setPage} />
       {lightboxIndex !== null && (
-        <Lightbox items={lightboxItems} startIndex={lightboxIndex} onClose={() => setLightboxIndex(null)} />
+        <Lightbox items={lightboxItems} startIndex={lightboxIndex} title={albumName} onClose={() => setLightboxIndex(null)} />
       )}
     </>
   );

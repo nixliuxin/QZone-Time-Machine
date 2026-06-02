@@ -144,6 +144,7 @@ function MessageCard({ message }: { message: Message }) {
         width: w, height: h,
         uploadtime: p.uploadtime,
         shoottime: p.shoottime,
+        location: location || undefined,
       },
     };
   }).filter((m) => m.src);
