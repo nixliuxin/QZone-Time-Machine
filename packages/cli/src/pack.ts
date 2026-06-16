@@ -342,6 +342,107 @@ function readManifestUser(userDir: string, id: string): ManifestUser {
   }
 }
 
+interface RosterEntry {
+  uin: number;
+  name: string;
+  nickname?: string;
+  remark?: string;
+  group?: string;
+  /** 'accessible' | 'no_access' | 'unknown' (access snapshot at backup time). */
+  access: string;
+  accessCheckedAt?: string;
+  /** Whether a real local backup (with content) exists for this friend. */
+  hasBackup: boolean;
+  counts?: Record<string, number>;
+  isOwner?: boolean;
+}
+
+/**
+ * Build `_roster.json`: the complete friend list (from the owner's
+ * friends.json) merged with the access-status snapshot (_access_status.json)
+ * and local-backup presence (the manifest). This is what lets the launcher show
+ * every friend and distinguish (1) on the friend list, (2) access at backup
+ * time, (3) whether content was archived locally — independent of which stub
+ * dirs were cleaned up.
+ */
+function buildRoster(root: string, out: string, users: ManifestUser[], log: { info: (m: string) => void; warn: (m: string) => void }): void {
+  // Owner's friends.json = the authoritative full roster.
+  const owner = users.find((u) => u.isOwner);
+  let friends: any[] = [];
+  if (owner) {
+    const fp = join(root, owner.id, 'data', 'friends.json');
+    if (existsSync(fp)) {
+      try {
+        const v = JSON.parse(readFileSync(fp, 'utf8'));
+        friends = Array.isArray(v) ? v : (Array.isArray(v?.items) ? v.items : []);
+      } catch { log.warn('Roster: owner friends.json unparseable'); }
+    }
+  }
+  if (!friends.length) log.warn('Roster: no owner friends.json found; roster will only list backed-up users');
+
+  // Access snapshot recorded during backup runs.
+  let access: Record<string, any> = {};
+  const ap = join(root, '_access_status.json');
+  if (existsSync(ap)) {
+    try { access = JSON.parse(readFileSync(ap, 'utf8')).users || {}; } catch { /* ignore */ }
+  }
+
+  const mByUin = new Map<number, ManifestUser>();
+  for (const u of users) if (u.uin) mByUin.set(u.uin, u);
+
+  const roster: RosterEntry[] = [];
+  const seen = new Set<number>();
+  for (const f of friends) {
+    const uin = Number(f.uin);
+    if (!uin) continue;
+    seen.add(uin);
+    const m = mByUin.get(uin);
+    const a = access[String(uin)];
+    roster.push({
+      uin,
+      name: f.remark || f.name || m?.name || String(uin),
+      nickname: f.name || undefined,
+      remark: f.remark || undefined,
+      group: f.gpname || undefined,
+      access: a?.status || (m ? 'accessible' : 'unknown'),
+      accessCheckedAt: a?.checkedAt,
+      hasBackup: !!m,
+      counts: m?.counts,
+      isOwner: m?.isOwner,
+    });
+  }
+  // Backed-up users not in the friend list (owner self, ex-friends, etc.).
+  for (const m of users) {
+    if (!m.uin || seen.has(m.uin)) continue;
+    const a = access[String(m.uin)];
+    roster.push({
+      uin: m.uin,
+      name: m.name,
+      nickname: m.nickname,
+      remark: m.remark,
+      access: a?.status || 'accessible',
+      accessCheckedAt: a?.checkedAt,
+      hasBackup: true,
+      counts: m.counts,
+      isOwner: m.isOwner,
+    });
+  }
+  roster.sort((a, b) =>
+    (b.hasBackup ? 1 : 0) - (a.hasBackup ? 1 : 0) ||
+    String(a.name).localeCompare(String(b.name), 'zh'));
+
+  const withBackup = roster.filter((r) => r.hasBackup).length;
+  const accessible = roster.filter((r) => r.access === 'accessible').length;
+  writeFileSync(join(out, '_roster.json'), JSON.stringify({
+    generatedAt: new Date().toISOString(),
+    total: roster.length,
+    withBackup,
+    accessible,
+    users: roster,
+  }, null, 2), 'utf8');
+  log.info(`Roster written: ${roster.length} friends (${withBackup} with local backup, ${accessible} accessible)`);
+}
+
 export async function packArchive(opts: PackOptions): Promise<{ packed: number; skipped: number; failed: number }> {
   const log = opts.logger || console;
   const { root, out } = opts;
@@ -416,6 +517,10 @@ export async function packArchive(opts: PackOptions): Promise<{ packed: number; 
   const allUsers = [...merged.values()].sort((a, b) => a.id.localeCompare(b.id, 'zh'));
   writeFileSync(manifestPath, JSON.stringify({ generatedAt: new Date().toISOString(), users: allUsers }, null, 2), 'utf8');
   log.info(`Manifest written: ${manifest.length} users. packed=${packed} skipped=${skipped} failed=${failed}`);
+
+  // Roster: full friend list + access snapshot + local-backup flag.
+  try { buildRoster(root, out, allUsers, log); }
+  catch (e) { log.warn(`Roster build failed: ${(e as Error).message}`); }
 
   if (opts.exe !== false) copyLauncherExe(out, log);
   return { packed, skipped, failed };

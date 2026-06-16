@@ -30,6 +30,11 @@ export interface UserMeta {
   avatar?: string;
   counts?: Record<string, number>;
   isOwner?: boolean;
+  /** Roster fields (present when _roster.json exists): access snapshot + local-backup flag. */
+  access?: string;
+  accessCheckedAt?: string;
+  group?: string;
+  hasBackup?: boolean;
 }
 
 /** Folder id is `<uin>_<remark-or-nickname>`; split it into the two parts. */
@@ -124,11 +129,11 @@ export function createArchiveServer(target: string): ArchiveServer {
 
       if (path === '/' || path === '/index.html') {
         const list = await ensureManifest();
-        return sendHtml(res, renderHome(list));
+        return sendHtml(res, renderHome(mergeRoster(list, loadRoster(manifestDir))));
       }
       if (path === '/api/users') {
         const list = await ensureManifest();
-        return sendJson(res, list);
+        return sendJson(res, mergeRoster(list, loadRoster(manifestDir)));
       }
 
       // /u/<id>/<asset...>
@@ -223,6 +228,52 @@ function loadManifest(root: string, users: UserEntry[]): UserMeta[] | null {
     });
     return filtered.length ? filtered : null;
   } catch { return null; }
+}
+
+interface RosterEntry {
+  uin: number; name: string; nickname?: string; remark?: string; group?: string;
+  access: string; accessCheckedAt?: string; hasBackup: boolean;
+  counts?: Record<string, number>; isOwner?: boolean;
+}
+
+function loadRoster(root: string): RosterEntry[] | null {
+  const p = join(root, '_roster.json');
+  if (!existsSync(p)) return null;
+  try {
+    const j = JSON.parse(readFileSync(p, 'utf8'));
+    const arr: RosterEntry[] = Array.isArray(j) ? j : (j.users || []);
+    return arr.length ? arr : null;
+  } catch { return null; }
+}
+
+/**
+ * Merge the full friend roster with the discoverable manifest. The roster lists
+ * EVERY friend (incl. no-access / not-archived); the manifest provides the
+ * folder id + avatar for those with a real local backup. Without a roster
+ * (older archives), fall back to manifest entries (all implicitly accessible
+ * and backed-up). Only backed-up cards get an `id` so the homepage links them.
+ */
+function mergeRoster(manifest: UserMeta[], roster: RosterEntry[] | null): UserMeta[] {
+  if (!roster) return manifest.map((u) => ({ ...u, hasBackup: true, access: u.access || 'accessible' }));
+  const mByUin = new Map<number, UserMeta>();
+  for (const u of manifest) if (u.uin) mByUin.set(u.uin, u);
+  return roster.map((r) => {
+    const m = r.uin ? mByUin.get(r.uin) : undefined;
+    return {
+      id: m?.id ?? `roster_${r.uin}`,
+      uin: r.uin,
+      name: r.name,
+      nickname: r.nickname,
+      remark: r.remark,
+      group: r.group,
+      avatar: m?.avatar,
+      counts: m?.counts ?? r.counts,
+      isOwner: r.isOwner ?? m?.isOwner,
+      access: r.access,
+      accessCheckedAt: r.accessCheckedAt,
+      hasBackup: r.hasBackup && !!m,
+    };
+  });
 }
 
 function pickCounts(j: Record<string, unknown>): Record<string, number> {

@@ -2,7 +2,7 @@
 import { Command } from 'commander';
 import { createRequire } from 'node:module';
 import { resolve, join, basename } from 'node:path';
-import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync, statSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync, statSync, rmSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { convertUser, convertBatch, embedViewer, downloadAllEmojis } from './convert.js';
 
@@ -47,6 +47,76 @@ function makeLogger(prefix: string) {
     debug: (...a: unknown[]) => log('debug', ...a),
     log: (...a: unknown[]) => log('info', ...a),
   };
+}
+
+type AccessStatus = 'accessible' | 'no_access';
+
+/**
+ * Record a per-uin access snapshot into <outputRoot>/_access_status.json as a
+ * free byproduct of the `common` probe each backup already runs. This lets the
+ * launcher roster show which friends were accessible at backup time even after
+ * empty stub dirs for no-access friends are cleaned up. Sequential (backup-all
+ * runs one child at a time), so a plain read-modify-write is safe.
+ */
+function recordAccessStatus(
+  outputRoot: string, uin: number, name: string, status: AccessStatus,
+  logger: { warn: (m: string) => void },
+): void {
+  try {
+    const file = join(outputRoot, '_access_status.json');
+    let doc: { generatedAt?: string; users: Record<string, any> } = { users: {} };
+    if (existsSync(file)) {
+      try {
+        const parsed = JSON.parse(readFileSync(file, 'utf8'));
+        if (parsed && typeof parsed === 'object' && parsed.users) doc = parsed;
+      } catch { /* start fresh on corrupt file */ }
+    }
+    doc.users[String(uin)] = { uin, name, status, checkedAt: new Date().toISOString() };
+    doc.generatedAt = new Date().toISOString();
+    writeFileSync(file, JSON.stringify(doc, null, 2), 'utf8');
+  } catch (e: any) {
+    logger.warn(`[access] failed to record status for ${uin}: ${e.message}`);
+  }
+}
+
+/** True if the user dir holds any real archived content (list items or media). */
+function userDirHasRealData(userDir: string): boolean {
+  const dataDir = join(userDir, 'data');
+  if (!existsSync(dataDir)) return false;
+  const lists = ['messages.json', 'blogs.json', 'boards.json', 'shares.json', 'videos.json', 'diaries.json', 'favorites.json', 'visitors.json'];
+  for (const f of lists) {
+    const p = join(dataDir, f);
+    if (!existsSync(p)) continue;
+    try {
+      const v = JSON.parse(readFileSync(p, 'utf8'));
+      const arr = Array.isArray(v) ? v : (Array.isArray(v?.items) ? v.items : null);
+      if (arr && arr.length > 0) return true;
+    } catch { /* ignore */ }
+  }
+  const photosDir = join(dataDir, 'photos');
+  if (existsSync(photosDir)) {
+    try { if (readdirSync(photosDir).some((n) => n.endsWith('.json') && n !== 'albums.json')) return true; } catch { /* ignore */ }
+  }
+  return false;
+}
+
+/**
+ * Remove a freshly-created empty stub dir (no real content) for a no-access
+ * target, so a backup folder always means "has real archived content". Never
+ * deletes a dir that a prior successful backup populated.
+ */
+function cleanupEmptyUserDir(userDir: string, logger: { info: (m: string) => void; warn: (m: string) => void }): void {
+  try {
+    if (!existsSync(userDir)) return;
+    if (userDirHasRealData(userDir)) {
+      logger.warn(`[cleanup] ${basename(userDir)} has real data; keeping despite no_access`);
+      return;
+    }
+    rmSync(userDir, { recursive: true, force: true });
+    logger.info(`[cleanup] removed empty no-access stub: ${basename(userDir)}`);
+  } catch (e: any) {
+    logger.warn(`[cleanup] failed to remove ${basename(userDir)}: ${e.message}`);
+  }
 }
 
 program
@@ -272,6 +342,20 @@ program
         collectUserInfo({ client, targetUin, outputRoot: userDir, logger })
       );
 
+      // Access-status snapshot (free byproduct of the common probe).
+      recordAccessStatus(outputRoot, Number(targetUin), name,
+        u.status === 'no_access' ? 'no_access' : 'accessible', logger);
+
+      if (u.status === 'no_access') {
+        logger.warn('No access to this user\'s QZone, aborting.');
+        progress.setOverall('no_access');
+        // A backup folder should mean "has real archived content"; the full
+        // friend roster + access snapshot are preserved centrally, so drop the
+        // empty stub (keeps a prior populated dir if one somehow exists).
+        cleanupEmptyUserDir(userDir, logger);
+        return;
+      }
+
       // Record name sanitization into the user's own data.json so any cleaned name
       // is always traceable back to the original. Matching/dedup keys off uin, never
       // the display name. The folder uses the display name (remark||name); the QZone
@@ -300,11 +384,6 @@ program
         logger.warn(`[sanitize] failed to record name sanitize: ${e.message}`);
       }
 
-      if (u.status === 'no_access') {
-        logger.warn('No access to this user\'s QZone, aborting.');
-        progress.setOverall('no_access');
-        return;
-      }
       const realName = u.info?.name || u.info?.nickname || name;
       progress.state.name = realName;
 
