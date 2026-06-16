@@ -7,7 +7,7 @@
 'use strict';
 
 const path = require('path');
-const { writeData } = require('./_util.js');
+const { writeData, readData } = require('./_util.js');
 const friendsApi = require('../api/friends.js');
 const { NoAccessError, AuthInvalidError } = require('../client.js');
 
@@ -18,11 +18,24 @@ async function collectFriends({
   progress,
   withFriendshipTime = false,
   logger = console,
+  listFetch = true,
 }) {
   if (client.session.uin !== targetUin) {
     logger.info('[friends] friends list only accessible by owner uin, skipping');
     progress.finishModule('friends', 'no_access', 'not-owner');
     return { status: 'no_access', total: 0, fetched: 0, items: [] };
+  }
+
+  const outFile = path.join(outputRoot, 'data', 'friends.json');
+
+  // fill-missing: the friends list is a single non-paginated snapshot with no
+  // per-item fill, so if we already have it, keep it as-is (no API calls).
+  if (!listFetch) {
+    const r = readData(outFile, logger);
+    const existing = (r.ok && Array.isArray(r.value)) ? r.value : [];
+    logger.info(`[friends] fill-missing (no list fetch): keeping ${existing.length} existing`);
+    progress.finishModule('friends', 'done');
+    return { status: 'done', total: existing.length, fetched: existing.length, items: existing };
   }
 
   let json;
@@ -79,7 +92,6 @@ async function collectFriends({
     }
   }
 
-  const outFile = path.join(outputRoot, 'data', 'friends.json');
   writeData(outFile, items);
   progress.finishModule('friends', 'done');
   return { status: 'done', total: items.length, fetched: items.length, items };

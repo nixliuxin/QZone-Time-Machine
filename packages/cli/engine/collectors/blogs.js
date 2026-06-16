@@ -6,7 +6,7 @@
 
 const path = require('path');
 const fs = require('fs');
-const { writeData, readData, randomSleep, mergeByIds, buildIdSet, getItemId } = require('./_util.js');
+const { writeData, readData, randomSleep, buildIdSet, getItemId } = require('./_util.js');
 const blogsApi = require('../api/blogs.js');
 const { NoAccessError, AuthInvalidError } = require('../client.js');
 
@@ -72,6 +72,7 @@ function parseBlogDetail(html) {
 }
 
 const EMPTY_PAGE_THRESHOLD = 3;
+const KNOWN_PAGE_THRESHOLD = 2;
 const PAGE_SLEEP_MS = 1500;
 
 async function collectBlogs({
@@ -84,36 +85,40 @@ async function collectBlogs({
   withDetail = true,
   pageLimit = 0,
   incremental = false,
+  listFetch = true,
 }) {
-  const all = [];
   let totalReported = 0;
   let consecutiveEmpty = 0;
+  let consecutiveKnown = 0;
   let rateLimited = false;
 
   const outFile = path.join(outputRoot, 'data', 'blogs.json');
 
-  let existingIds = null;
-  let existingItems = [];
-  if (incremental) {
-    const r = readData(outFile, logger);
-    if (r.ok && Array.isArray(r.value)) {
-      existingItems = r.value;
-      existingIds = buildIdSet(existingItems, 'blogs');
-      logger.info(`[blogs] incremental: ${existingItems.length} existing items, ${existingIds.size} unique IDs`);
-    }
+  // Unified "fill-missing" model: load existing, skip if complete, else resume
+  // forward to fill the missing tail (never a full re-scan from page 0).
+  const r = readData(outFile, logger);
+  const existingItems = (r.ok && Array.isArray(r.value)) ? r.value : [];
+  const existingIds = buildIdSet(existingItems, 'blogs');
+  if (!r.ok && r.raw) logger.warn(`[blogs] existing JSON unparseable; treating as empty`);
+  const have = existingItems.length;
+  const progTotal = progress.module('blogs').totalReported || 0;
+
+  if (progTotal > 0 && have >= progTotal && pageLimit === 0 && !withDetail) {
+    logger.info(`[blogs] already complete (${have}/${progTotal}); skipping list fetch`);
+    progress.finishModule('blogs', 'done');
+    return { status: 'done', total: progTotal, fetched: have, rateLimited: false, items: existingItems };
   }
 
-  let startPage = incremental ? 0 : (progress.module('blogs').lastPage ?? -1) + 1;
-  if (!incremental && startPage > 0) {
-    const r = readData(outFile, logger);
-    if (r.ok && Array.isArray(r.value)) {
-      all.push(...r.value);
-    } else if (r.raw) {
-      startPage = 0;
-      all.length = 0;
-      progress.module('blogs').lastPage = -1;
-      logger.warn(`[blogs] existing JSON unparseable, resetting startPage=0 for full re-fetch`);
-    }
+  const all = existingItems.slice();
+  // listFetch=false: pure item-level fill (no list pagination at all); jump
+  // straight to the per-item detail/readnum fill below.
+  // Otherwise resume forward; if already complete, also skip paging.
+  let startPage = (!listFetch || (progTotal > 0 && have >= progTotal))
+    ? Number.MAX_SAFE_INTEGER : Math.floor(have / pageSize);
+  if (have > 0 && startPage !== Number.MAX_SAFE_INTEGER) {
+    logger.info(`[blogs] fill-missing: ${have} existing (total≈${progTotal || '?'}), resuming forward from page ${startPage}`);
+  } else if (!listFetch && have > 0) {
+    logger.info(`[blogs] fill-missing (no list fetch): filling details on ${have} existing items`);
   }
 
   const maxPage = pageLimit > 0 ? startPage + pageLimit : 10000;
@@ -148,27 +153,28 @@ async function collectBlogs({
     } else {
       consecutiveEmpty = 0;
 
-      if (incremental && existingIds) {
-        const newItems = list.filter(it => {
-          const id = getItemId('blogs', it);
-          return id === undefined || !existingIds.has(String(id));
-        });
-        if (newItems.length === 0) {
-          logger.info(`[blogs] page ${page}: all ${list.length} items already known, stopping incremental`);
-          break;
-        }
-        if (newItems.length < list.length) {
-          logger.info(`[blogs] page ${page}: ${newItems.length} new, ${list.length - newItems.length} known`);
-        }
-        all.push(...newItems);
-      } else {
-        all.push(...list);
+      const newItems = list.filter(it => {
+        const id = getItemId('blogs', it);
+        return id === undefined || !existingIds.has(String(id));
+      });
+      for (const it of newItems) {
+        const id = getItemId('blogs', it);
+        if (id !== undefined) existingIds.add(String(id));
       }
 
-      progress.markPageDone('blogs', page, all.length, totalReported);
-      writeData(outFile, all);
-      logger.info(`[blogs] page ${page}: +${list.length} => total ${all.length}/${totalReported || '?'}`);
-      if (totalReported && all.length >= totalReported) break;
+      if (newItems.length === 0) {
+        consecutiveKnown++;
+        logger.info(`[blogs] page ${page}: all ${list.length} known (${consecutiveKnown}/${KNOWN_PAGE_THRESHOLD})`);
+        if (totalReported && all.length >= totalReported) break;
+        if (consecutiveKnown >= KNOWN_PAGE_THRESHOLD) break;
+      } else {
+        consecutiveKnown = 0;
+        all.push(...newItems);
+        progress.markPageDone('blogs', page, all.length, totalReported);
+        writeData(outFile, all);
+        logger.info(`[blogs] page ${page}: +${newItems.length} new (${list.length - newItems.length} known) => total ${all.length}/${totalReported || '?'}`);
+        if (totalReported && all.length >= totalReported) break;
+      }
     }
     await randomSleep(PAGE_SLEEP_MS);
   }
@@ -224,19 +230,7 @@ async function collectBlogs({
     }
   }
 
-  // In incremental mode, merge new items with existing
-  let finalItems = all;
-  if (incremental && existingItems.length > 0) {
-    if (all.length > 0) {
-      const { merged, addedCount } = mergeByIds(existingItems, all, 'blogs');
-      logger.info(`[blogs] incremental merge: ${addedCount} new items added to ${existingItems.length} existing`);
-      finalItems = merged;
-    } else {
-      logger.info(`[blogs] incremental: no new items found`);
-      finalItems = existingItems;
-    }
-  }
-
+  const finalItems = all;
   writeData(outFile, finalItems);
   const status = rateLimited ? 'rate_limited' : 'done';
   progress.finishModule('blogs', status, rateLimited ? 'consecutive empty pages' : null);

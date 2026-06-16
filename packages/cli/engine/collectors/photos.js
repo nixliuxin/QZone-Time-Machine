@@ -350,4 +350,51 @@ async function collectPhotos({
   return { status: 'done', total: totalAlbums, fetched: totalPhotos, items: albums };
 }
 
-module.exports = { collectPhotos };
+/**
+ * Data-driven album media repair (mirrors inline-resources for non-photo media):
+ * reads data/photos/albums.json and (re)downloads any album cover / photo whose
+ * local file is missing. Fully idempotent — the Downloader skips files that
+ * already exist and pass validation, so nothing is re-fetched or re-downloaded.
+ * Consumes NO list/data APIs; only media CDN fetches for genuinely missing files.
+ * Reachable in --fill-missing (where the photos collector is skipped) and on any
+ * re-run regardless of the photos module's "done" status.
+ */
+async function repairAlbumPhotoFiles({ outputRoot, downloader, logger = console }) {
+  const albumOutFile = path.join(outputRoot, 'data', 'photos', 'albums.json');
+  if (!fs.existsSync(albumOutFile)) return { enqueued: 0 };
+  const r = readData(albumOutFile, logger);
+  const albums = (r.ok && Array.isArray(r.value)) ? r.value : [];
+  if (!albums.length) return { enqueued: 0 };
+
+  let enq = 0;
+  for (const album of albums) {
+    if (album.custom_url && album.custom_filepath) {
+      downloader.enqueue({
+        url: album.custom_url,
+        destAbs: path.join(outputRoot, album.custom_filepath),
+        expectedFamily: 'jpg', tag: 'album-cover',
+        meta: { albumId: album.id },
+      });
+      enq++;
+    }
+    const photoList = Array.isArray(album.photoList) ? album.photoList : [];
+    for (const photo of photoList) {
+      const url = photo.custom_url || pickPhotoUrl(photo);
+      if (!url || !photo.custom_filepath) continue;
+      const family = pickPhotoFamily(photo);
+      downloader.enqueue({
+        url,
+        destAbs: path.join(outputRoot, photo.custom_filepath),
+        expectedFamily: family === 'jpg' ? 'jpg' : family,
+        tag: 'album-photo',
+        meta: { albumId: album.id, picKey: photo.picKey },
+      });
+      enq++;
+    }
+  }
+  logger.info(`[photos] media repair: verifying ${enq} album files (only missing ones download)`);
+  await downloader.drain();
+  return { enqueued: enq };
+}
+
+module.exports = { collectPhotos, repairAlbumPhotoFiles };

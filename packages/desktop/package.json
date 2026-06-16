@@ -1,0 +1,26 @@
+{
+  "name": "@qzone-tools/desktop",
+  "version": "0.2.0",
+  "private": true,
+  "description": "QQ Zone Time Machine desktop app (Electron + React). Currently: clean QZone login (no automation fingerprint) that writes cookies.json/auth.json for the CLI.",
+  "main": "out/main/index.js",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "start": "electron-vite preview"
+  },
+  "dependencies": {
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@vitejs/plugin-react": "^4.3.0",
+    "electron": "^33.0.0",
+    "electron-vite": "^2.3.0",
+    "typescript": "^5.6.0",
+    "vite": "^6.0.0"
+  }
+}

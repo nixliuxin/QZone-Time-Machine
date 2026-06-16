@@ -21,26 +21,44 @@ async function collectVisitors({
   progress,
   logger = console,
   maxPages = 1000,
+  listFetch = true,
 }) {
-  const all = [];
   let totalReported = 0;
   let consecutiveEmpty = 0;
+  let consecutiveKnown = 0;
   let rateLimited = false;
 
-  let startPage = (progress.module('visitors').lastPage ?? -1) + 1;
   const outFile = path.join(outputRoot, 'data', 'visitors.json');
-  let lastTotalPage = 0;
-  if (startPage > 0) {
-    const r = readData(outFile, logger);
-    if (r.ok && r.value) {
-      if (Array.isArray(r.value.items)) all.push(...r.value.items);
-      if (typeof r.value.total === 'number') totalReported = r.value.total;
-      if (typeof r.value.totalPage === 'number') lastTotalPage = r.value.totalPage;
-    } else if (r.raw) {
-      startPage = 0;
-      progress.module('visitors').lastPage = -1;
-      logger.warn('[visitors] existing JSON unparseable, resetting startPage=0 for full re-fetch');
+
+  // Unified "fill-missing" model. Visitor entries have no stable unique id, so
+  // dedup uses uin+time; the list is volatile (repeat visits), so "complete"
+  // means have >= total.
+  const r = readData(outFile, logger);
+  const existing = (r.ok && r.value && Array.isArray(r.value.items)) ? r.value.items : [];
+  if (r.ok && r.value) {
+    if (typeof r.value.total === 'number') totalReported = r.value.total;
+  } else if (r.raw) {
+    logger.warn('[visitors] existing JSON unparseable; treating as empty');
+  }
+  let lastTotalPage = (r.ok && r.value && typeof r.value.totalPage === 'number') ? r.value.totalPage : 0;
+  const have = existing.length;
+  const visitorKey = (it) => `${it.uin}_${it.time || it.pubtime || ''}`;
+
+  if (!listFetch || (totalReported > 0 && have >= totalReported)) {
+    if (have > 0 || !listFetch) {
+      logger.info(`[visitors] ${!listFetch ? 'fill-missing (no list fetch)' : `already complete (${have}/${totalReported})`}; skipping list fetch`);
+      progress.finishModule('visitors', 'done');
+      return { status: 'done', total: totalReported || have, fetched: have, items: existing };
     }
+  }
+
+  const all = existing.slice();
+  const seen = new Set(existing.map(visitorKey));
+  // Derive page size from prior total/totalPage to resume forward at the right page.
+  const pageSize = (lastTotalPage > 0 && totalReported > 0) ? Math.ceil(totalReported / lastTotalPage) : 0;
+  let startPage = pageSize > 0 ? Math.floor(have / pageSize) : 0;
+  if (have > 0) {
+    logger.info(`[visitors] fill-missing: ${have} existing (total≈${totalReported || '?'}), resuming forward from page ${startPage}`);
   }
 
   for (let page = startPage; page < maxPages; page++) {
@@ -81,11 +99,21 @@ async function collectVisitors({
       }
     } else {
       consecutiveEmpty = 0;
-      all.push(...list);
-      progress.markPageDone('visitors', page, all.length, totalReported);
-      writeData(outFile, { items: all, total: totalReported, totalPage: lastTotalPage });
-      logger.info(`[visitors] page ${page}: +${list.length} => total ${all.length}/${totalReported || '?'} (totalpage=${totalPage || '?'})`);
-      if (totalPage && page + 1 >= totalPage) break;
+      const newItems = list.filter(it => !seen.has(visitorKey(it)));
+      for (const it of newItems) seen.add(visitorKey(it));
+      if (newItems.length === 0) {
+        consecutiveKnown++;
+        if (totalPage && page + 1 >= totalPage) break;
+        if (totalReported && all.length >= totalReported) break;
+        if (consecutiveKnown >= 2) break;
+      } else {
+        consecutiveKnown = 0;
+        all.push(...newItems);
+        progress.markPageDone('visitors', page, all.length, totalReported);
+        writeData(outFile, { items: all, total: totalReported, totalPage: lastTotalPage });
+        logger.info(`[visitors] page ${page}: +${newItems.length} new => total ${all.length}/${totalReported || '?'} (totalpage=${totalPage || '?'})`);
+        if (totalPage && page + 1 >= totalPage) break;
+      }
     }
     await randomSleep(PAGE_SLEEP_MS);
   }

@@ -20,6 +20,7 @@ async function collectFavorites({
   progress,
   pageSize = 30,
   logger = console,
+  listFetch = true,
 }) {
   if (client.session.uin !== targetUin) {
     logger.info('[favorites] only accessible by owner uin, skipping');
@@ -27,22 +28,34 @@ async function collectFavorites({
     return { status: 'no_access', total: 0, fetched: 0, items: [] };
   }
 
-  const all = [];
   let totalReported = 0;
   let consecutiveEmpty = 0;
   let rateLimited = false;
 
-  let startPage = (progress.module('favorites').lastPage ?? -1) + 1;
   const outFile = path.join(outputRoot, 'data', 'favorites.json');
-  if (startPage > 0) {
-    const r = readData(outFile, logger);
-    if (r.ok && Array.isArray(r.value)) {
-      all.push(...r.value);
-    } else if (r.raw) {
-      startPage = 0;
-      progress.module('favorites').lastPage = -1;
-      logger.warn('[favorites] existing JSON unparseable, resetting startPage=0 for full re-fetch');
+
+  // Unified "fill-missing" model (see messages.js): load existing, skip if
+  // complete, else resume forward; listFetch=false means no list calls at all.
+  const r = readData(outFile, logger);
+  const existingItems = (r.ok && Array.isArray(r.value)) ? r.value : [];
+  if (!r.ok && r.raw) logger.warn('[favorites] existing JSON unparseable; treating as empty');
+  const have = existingItems.length;
+  const progTotal = progress.module('favorites').totalReported || 0;
+
+  if (!listFetch || (progTotal > 0 && have >= progTotal)) {
+    if (have > 0 || !listFetch) {
+      logger.info(`[favorites] ${!listFetch ? 'fill-missing (no list fetch)' : `already complete (${have}/${progTotal})`}; skipping list fetch`);
+      progress.finishModule('favorites', 'done');
+      return { status: 'done', total: progTotal || have, fetched: have, items: existingItems };
     }
+  }
+
+  const all = existingItems.slice();
+  const seen = new Set(existingItems.map(it => String(it.id)));
+  let consecutiveKnown = 0;
+  let startPage = Math.floor(have / pageSize);
+  if (have > 0) {
+    logger.info(`[favorites] fill-missing: ${have} existing (total≈${progTotal || '?'}), resuming forward from page ${startPage}`);
   }
 
   for (let page = startPage; page < 10000; page++) {
@@ -73,11 +86,20 @@ async function collectFavorites({
       }
     } else {
       consecutiveEmpty = 0;
-      all.push(...list);
-      progress.markPageDone('favorites', page, all.length, totalReported);
-      writeData(outFile, all);
-      logger.info(`[favorites] page ${page}: +${list.length} => total ${all.length}/${totalReported || '?'}`);
-      if (totalReported && all.length >= totalReported) break;
+      const newItems = list.filter(it => !seen.has(String(it.id)));
+      for (const it of newItems) seen.add(String(it.id));
+      if (newItems.length === 0) {
+        consecutiveKnown++;
+        if (totalReported && all.length >= totalReported) break;
+        if (consecutiveKnown >= 2) break;
+      } else {
+        consecutiveKnown = 0;
+        all.push(...newItems);
+        progress.markPageDone('favorites', page, all.length, totalReported);
+        writeData(outFile, all);
+        logger.info(`[favorites] page ${page}: +${newItems.length} new => total ${all.length}/${totalReported || '?'}`);
+        if (totalReported && all.length >= totalReported) break;
+      }
     }
     await randomSleep(PAGE_SLEEP_MS);
   }

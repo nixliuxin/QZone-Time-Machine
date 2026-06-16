@@ -45,6 +45,21 @@ class EmptyDataError extends Error {
 }
 
 /**
+ * Thrown when the global rate-limit circuit breaker opens: either a Tencent WAF
+ * block (immediate) or too many consecutive rate-limit/empty responses. Once open,
+ * every subsequent getJson throws this immediately so the run aborts fast instead
+ * of hammering a server that is actively limiting us. Callers should stop the whole
+ * backup (and, in batch mode, the whole batch) rather than continue to next module.
+ */
+class CircuitOpenError extends Error {
+  constructor(reason) {
+    super(`Rate-limit circuit open: ${reason}`);
+    this.name = 'CircuitOpenError';
+    this.reason = reason;
+  }
+}
+
+/**
  * Parse QZone JSONP / Callback / xxx_Callback wrapped responses.
  * Returns a JSON object; throws on parse failure.
  *
@@ -158,6 +173,11 @@ class QzoneClient {
       referer: c.referer || 'https://user.qzone.qq.com/',
       minRequestGapMs: c.minRequestGapMs ?? 500,
       dataDir: c.dataDir || null,
+      // Global circuit breaker: after this many consecutive getJson calls end in
+      // a rate-limit / empty-data response (despite per-request backoff+retries),
+      // trip the breaker so the whole run aborts. 0 disables. WAF 501 trips instantly.
+      rlCircuitThreshold: c.rlCircuitThreshold ?? 3,
+      wafAbort: c.wafAbort !== false,
     };
     this.logger = opts.logger || ((lvl, ...args) => {
       const fn = console[lvl] || console.log;
@@ -166,6 +186,9 @@ class QzoneClient {
     this._lastRequestTime = 0;
     this._totalRequests = 0;
     this._sessionStartTime = Date.now();
+    this._consecutiveRateLimits = 0;
+    this._circuitOpen = false;
+    this._circuitReason = null;
   }
 
   /** Enforce a minimum gap between consecutive requests (global throttle). */
@@ -295,6 +318,9 @@ class QzoneClient {
    */
   async getJson(url, params = {}, opts = {}) {
     this.checkSessionAge();
+    if (this._circuitOpen) {
+      throw new CircuitOpenError(this._circuitReason || 'breaker already open');
+    }
     const maxRetries = opts.retries ?? this.config.listRetryCount;
     let attempt = 0;
     let lastErr;
@@ -305,8 +331,15 @@ class QzoneClient {
           throw new NoAccessError(status, `HTTP ${status}`, data && String(data).slice(0, 200));
         }
         if (status >= 500 || status === 0) {
-          // WAF 501: Tencent WAF global block, do not retry
+          // WAF 501: Tencent WAF global block, do not retry. Trip the breaker so the
+          // entire run aborts immediately — continuing would only deepen the block.
           if (status === 501 && typeof data === 'string' && data.includes('waf.tencent.com')) {
+            if (this.config.wafAbort) {
+              this._circuitOpen = true;
+              this._circuitReason = 'Tencent WAF 501 global block';
+              this.logger('error', `WAF 501 detected — opening circuit breaker, aborting run.`);
+              throw new CircuitOpenError(this._circuitReason);
+            }
             const err = new RateLimitError(`WAF 501 (Tencent WAF blocked)`, data.slice(0, 200));
             err.isWaf = true;
             err.noRetry = true;
@@ -341,11 +374,14 @@ class QzoneClient {
             throw new EmptyDataError(json);
           }
         }
+        // Success: reset the consecutive-rate-limit counter.
+        this._consecutiveRateLimits = 0;
         return json;
       } catch (err) {
         // Non-retryable errors, throw immediately
         if (err instanceof NoAccessError) throw err;
         if (err instanceof AuthInvalidError) throw err;
+        if (err instanceof CircuitOpenError) throw err;
         if (err.noRetry) throw err;
 
         lastErr = err;
@@ -360,6 +396,19 @@ class QzoneClient {
         await sleep(wait);
         attempt++;
       }
+    }
+    // Retries exhausted. If this was a rate-limit / silent-empty failure, count it
+    // toward the global circuit breaker; trip once we hit the threshold.
+    if (lastErr instanceof RateLimitError || lastErr instanceof EmptyDataError) {
+      this._consecutiveRateLimits++;
+      const threshold = this.config.rlCircuitThreshold;
+      if (threshold > 0 && this._consecutiveRateLimits >= threshold) {
+        this._circuitOpen = true;
+        this._circuitReason = `${this._consecutiveRateLimits} consecutive rate-limit responses`;
+        this.logger('error', `Circuit breaker tripped: ${this._circuitReason}. Aborting run to avoid a ban.`);
+        throw new CircuitOpenError(this._circuitReason);
+      }
+      this.logger('warn', `Rate-limit strike ${this._consecutiveRateLimits}/${threshold} (will abort at threshold).`);
     }
     throw lastErr;
   }
@@ -393,6 +442,7 @@ module.exports = {
   AuthInvalidError,
   RateLimitError,
   EmptyDataError,
+  CircuitOpenError,
   parseJsonp,
   detectStatus,
   sleep,

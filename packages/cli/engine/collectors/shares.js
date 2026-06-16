@@ -7,11 +7,12 @@
 
 const path = require('path');
 const fs = require('fs');
-const { writeData, readData, randomSleep, mergeByIds, buildIdSet } = require('./_util.js');
+const { writeData, readData, randomSleep, buildIdSet } = require('./_util.js');
 const sharesApi = require('../api/shares.js');
 const { NoAccessError, AuthInvalidError } = require('../client.js');
 
 const EMPTY_PAGE_THRESHOLD = 3;
+const KNOWN_PAGE_THRESHOLD = 2;
 const PAGE_SLEEP_MS = 1500;
 
 async function collectShares({
@@ -23,36 +24,33 @@ async function collectShares({
   logger = console,
   incremental = false,
 }) {
-  const all = [];
   let totalReported = 0;
   let consecutiveEmpty = 0;
+  let consecutiveKnown = 0;
   let rateLimited = false;
   let hadError = false;
   let lastError = null;
 
   const outFile = path.join(outputRoot, 'data', 'shares.json');
 
-  let existingIds = null;
-  let existingItems = [];
-  if (incremental) {
-    const r = readData(outFile, logger);
-    if (r.ok && Array.isArray(r.value)) {
-      existingItems = r.value;
-      existingIds = buildIdSet(existingItems, 'shares');
-      logger.info(`[shares] incremental: ${existingItems.length} existing items, ${existingIds.size} unique IDs`);
-    }
+  // Unified "fill-missing" model (see messages.js).
+  const r = readData(outFile, logger);
+  const existingItems = (r.ok && Array.isArray(r.value)) ? r.value : [];
+  const existingIds = buildIdSet(existingItems, 'shares');
+  if (!r.ok && r.raw) logger.warn('[shares] existing JSON unparseable; treating as empty');
+  const have = existingItems.length;
+  const progTotal = progress.module('shares').totalReported || 0;
+
+  if (progTotal > 0 && have >= progTotal) {
+    logger.info(`[shares] already complete (${have}/${progTotal}); skipping list fetch`);
+    progress.finishModule('shares', 'done');
+    return { status: 'done', total: progTotal, fetched: have, items: existingItems };
   }
 
-  let startPage = incremental ? 0 : (progress.module('shares').lastPage ?? -1) + 1;
-  if (!incremental && startPage > 0) {
-    const r = readData(outFile, logger);
-    if (r.ok && Array.isArray(r.value)) {
-      all.push(...r.value);
-    } else if (r.raw) {
-      startPage = 0;
-      progress.module('shares').lastPage = -1;
-      logger.warn('[shares] existing JSON unparseable, resetting startPage=0 for full re-fetch');
-    }
+  const all = existingItems.slice();
+  const startPage = Math.floor(have / pageSize);
+  if (have > 0) {
+    logger.info(`[shares] fill-missing: ${have} existing (total≈${progTotal || '?'}), resuming forward from page ${startPage}`);
   }
 
   for (let page = startPage; page < 10000; page++) {
@@ -89,36 +87,27 @@ async function collectShares({
     } else {
       consecutiveEmpty = 0;
 
-      if (incremental && existingIds) {
-        const newItems = list.filter(it => !existingIds.has(String(it.id)));
-        if (newItems.length === 0) {
-          logger.info(`[shares] page ${apiPage}: all ${list.length} items already known, stopping incremental`);
-          break;
-        }
-        all.push(...newItems);
-      } else {
-        all.push(...list);
-      }
+      const newItems = list.filter(it => !existingIds.has(String(it.id)));
+      for (const it of newItems) existingIds.add(String(it.id));
 
-      progress.markPageDone('shares', page, all.length, totalReported);
-      writeData(outFile, all);
-      logger.info(`[shares] page ${apiPage}: +${list.length} => total ${all.length}/${totalReported || '?'}`);
-      if (totalReported && all.length >= totalReported) break;
+      if (newItems.length === 0) {
+        consecutiveKnown++;
+        logger.info(`[shares] page ${apiPage}: all ${list.length} known (${consecutiveKnown}/${KNOWN_PAGE_THRESHOLD})`);
+        if (totalReported && all.length >= totalReported) break;
+        if (consecutiveKnown >= KNOWN_PAGE_THRESHOLD) break;
+      } else {
+        consecutiveKnown = 0;
+        all.push(...newItems);
+        progress.markPageDone('shares', page, all.length, totalReported);
+        writeData(outFile, all);
+        logger.info(`[shares] page ${apiPage}: +${newItems.length} new (${list.length - newItems.length} known) => total ${all.length}/${totalReported || '?'}`);
+        if (totalReported && all.length >= totalReported) break;
+      }
     }
     await randomSleep(PAGE_SLEEP_MS);
   }
 
-  let finalItems = all;
-  if (incremental && existingItems.length > 0) {
-    if (all.length > 0) {
-      const { merged, addedCount } = mergeByIds(existingItems, all, 'shares');
-      logger.info(`[shares] incremental merge: ${addedCount} new items added to ${existingItems.length} existing`);
-      finalItems = merged;
-    } else {
-      finalItems = existingItems;
-    }
-  }
-
+  const finalItems = all;
   writeData(outFile, finalItems);
   let status = 'done';
   let errMsg = null;

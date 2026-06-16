@@ -1,0 +1,127 @@
+:root {
+  color-scheme: dark;
+  --bg: #0f1115;
+  --panel: #1a1d24;
+  --border: #2a2f3a;
+  --text: #e6e8ec;
+  --muted: #8b909b;
+  --accent: #f5c542;
+  --accent-press: #d9ab2e;
+  --ok: #3ecf8e;
+  --err: #ff6b6b;
+}
+
+* { box-sizing: border-box; }
+
+html, body, #root { height: 100%; margin: 0; }
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+.app {
+  max-width: 640px;
+  margin: 0 auto;
+  padding: 32px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  min-height: 100%;
+}
+
+.hero { text-align: center; }
+.logo { font-size: 24px; font-weight: 700; letter-spacing: 1px; }
+.subtitle { color: var(--muted); margin-top: 6px; font-size: 13px; }
+
+.card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.lead { margin: 0; color: var(--muted); line-height: 1.7; font-size: 14px; }
+.lead code {
+  background: #11141a;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 1px 5px;
+  color: var(--text);
+  font-size: 12px;
+}
+
+.field { display: flex; flex-direction: column; gap: 6px; }
+.field span { font-size: 13px; color: var(--muted); }
+.field input {
+  background: #11141a;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  color: var(--text);
+  font-size: 14px;
+  font-family: ui-monospace, "Cascadia Code", monospace;
+}
+.field input:focus { outline: none; border-color: var(--accent); }
+
+.primary {
+  background: var(--accent);
+  color: #1a1400;
+  border: none;
+  border-radius: 10px;
+  padding: 12px 16px;
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.primary:hover:not(:disabled) { background: var(--accent-press); }
+.primary:disabled { opacity: 0.6; cursor: default; }
+
+.status {
+  border-radius: 10px;
+  padding: 14px 16px;
+  font-size: 14px;
+  line-height: 1.9;
+  border: 1px solid var(--border);
+}
+.status.ok { border-color: rgba(62, 207, 142, 0.4); }
+.status.err { border-color: rgba(255, 107, 107, 0.4); color: var(--err); }
+.status .path {
+  margin-top: 4px;
+  color: var(--accent);
+  cursor: pointer;
+  word-break: break-all;
+  font-family: ui-monospace, monospace;
+  font-size: 13px;
+}
+.status .path:hover { text-decoration: underline; }
+
+.foot { color: var(--muted); font-size: 12px; text-align: center; line-height: 1.7; margin-top: auto; }
+
+/* Inline-login top bar (the QQ login page is embedded below it in the same window) */
+.loginbar {
+  height: 44px;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 0 14px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+}
+.loginbar .cancel {
+  background: transparent;
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 5px 12px;
+  font-size: 13px;
+  cursor: pointer;
+}
+.loginbar .cancel:hover { border-color: var(--accent); color: var(--accent); }
+.loginbar-title { color: var(--muted); font-size: 13px; }

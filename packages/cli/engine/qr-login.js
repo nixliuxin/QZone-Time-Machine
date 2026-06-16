@@ -298,7 +298,10 @@ async function loginWithPuppeteer(opts, onStatus) {
   const timeoutMs = opts.timeoutMs ?? 5 * 60 * 1000;
 
   onStatus({ stage: 'browser', msg: 'Launching browser...' });
-  const browser = await puppeteer.launch({
+  // puppeteer-core ships without a bundled Chromium, so we must point it at a
+  // real browser. Honor PUPPETEER_EXECUTABLE_PATH, else use an installed Chrome
+  // channel (falls back to the platform's installed Chrome).
+  const launchOpts = {
     headless: false,
     args: [
       '--no-sandbox',
@@ -306,7 +309,13 @@ async function loginWithPuppeteer(opts, onStatus) {
       '--disable-blink-features=AutomationControlled',
     ],
     defaultViewport: { width: 1280, height: 800 },
-  });
+  };
+  if (process.env.PUPPETEER_EXECUTABLE_PATH) {
+    launchOpts.executablePath = process.env.PUPPETEER_EXECUTABLE_PATH;
+  } else {
+    launchOpts.channel = 'chrome';
+  }
+  const browser = await puppeteer.launch(launchOpts);
 
   try {
     const page = await browser.newPage();

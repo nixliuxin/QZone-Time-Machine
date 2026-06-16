@@ -10,8 +10,9 @@ function tParam() {
   return String(Math.random().toFixed(16)).slice(-9).replace(/^0/, '9');
 }
 
-async function getVideos({ client, targetUin, page, pageSize = 20 }) {
+async function getVideos({ client, targetUin, page, pageSize = 20, start }) {
   const ownerUin = client.session.uin;
+  const startIdx = start != null ? start : (page || 0) * pageSize;
   return client.getJson(
     REST_URLS.VIDEO_LIST_URL,
     {
@@ -21,7 +22,7 @@ async function getVideos({ client, targetUin, page, pageSize = 20 }) {
       hostUin: targetUin,
       appid: 4,
       getMethod: 2,
-      start: page * pageSize,
+      start: startIdx,
       count: pageSize,
       need_old: 0,
       getUserInfo: 0,

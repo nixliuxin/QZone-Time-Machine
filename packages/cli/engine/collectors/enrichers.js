@@ -15,6 +15,7 @@ const sharesApi = require('../api/shares.js');
 const videosApi = require('../api/videos.js');
 const likesApi = require('../api/likes.js');
 const visitorsApi = require('../api/visitors.js');
+const { CircuitOpenError, AuthInvalidError } = require('../client.js');
 const { randomSleep } = require('./_util.js');
 
 const PAGE_SLEEP_MS = 1200;
@@ -40,6 +41,7 @@ async function pullCommentsPaged({
     try {
       res = await fetcher(page);
     } catch (e) {
+      if (e instanceof CircuitOpenError || e instanceof AuthInvalidError) throw e;
       logger.warn(`[enrich.comments] page ${page} error: ${e.message}`);
       break;
     }
@@ -70,7 +72,7 @@ async function enrichMessageComments({ client, targetUin, items, logger = consol
           client, targetUin, tid: m.tid, page: p, pageSize,
         });
         const data = j.data || j;
-        return { list: data.commentlist || data.commentList || [], total: total };
+        return { list: data.comments || data.commentlist || data.commentList || [], total: total };
       },
       initialList: m.commentlist || [],
       totalHint: total,
@@ -151,9 +153,10 @@ async function enrichAlbumPhotoComments({ client, targetUin, albums, logger = co
 async function enrichVideoComments({ client, targetUin, items, logger = console }) {
   let touched = 0;
   for (const v of items) {
-    const tid = v.tid || v.video_id;
+    // QZone videos are video-说说: comments live on the shuoshuo (shuoshuoid).
+    const tid = v.shuoshuoid || v.vid || v.tid || v.video_id;
     const cur = (v.comments || []).length;
-    const total = v.cmtTotal || v.commentNum || 0;
+    const total = v.commentCount || v.cmtTotal || v.commentNum || 0;
     if (!tid || total <= cur) continue;
     const pageSize = 20;
     const startPage = Math.floor(cur / pageSize);
@@ -217,7 +220,11 @@ async function enrichLikes({ client, items, buildKey, label = 'item', logger = c
   let touched = 0;
   let skipped = 0;
   for (const it of items) {
-    if (Array.isArray(it.likes) && it.likes.length > 0) {
+    // Idempotency: enrichLikes is the only writer of the `likes` array, so its
+    // mere presence (even empty = genuinely 0 likes) means this item was already
+    // enriched. Skipping on presence (not length) prevents re-fetching the vast
+    // number of 0-like items on every fill-missing run.
+    if (Array.isArray(it.likes)) {
       skipped++;
       continue;
     }
@@ -227,14 +234,16 @@ async function enrichLikes({ client, items, buildKey, label = 'item', logger = c
       const j = await likesApi.getLikeList({ client, unikey });
       const data = j && j.data || {};
       it.likes = data.like_uin_info || data.like_list || [];
-      it.likeTotal = data.total || it.likes.length;
+      it.likeTotal = data.total ?? data.total_number ?? it.likes.length;
       touched++;
     } catch (e) {
+      // Let the circuit breaker / auth failure abort the whole run; ignore the rest.
+      if (e instanceof CircuitOpenError || e instanceof AuthInvalidError) throw e;
       // silently ignore failures
     }
     if (touched % 20 === 0) await randomSleep(1000);
   }
-  if (touched || skipped) logger.info(`[enrich] ${label} like enrichment: ${touched} fetched, ${skipped} already had likes`);
+  if (touched || skipped) logger.info(`[enrich] ${label} like enrichment: ${touched} fetched, ${skipped} already enriched`);
   return touched;
 }
 
@@ -261,7 +270,10 @@ async function enrichSingleVisitors({
         json = await visitorsApi.getSingleVisitors({
           client, targetUin, appid, targetId, page: p, pageSize,
         });
-      } catch (_) { break; }
+      } catch (e) {
+        if (e instanceof CircuitOpenError || e instanceof AuthInvalidError) throw e;
+        break;
+      }
       const data = (json && json.data) || {};
       const list = Array.isArray(data.items) ? data.items
         : (Array.isArray(data.list) ? data.list : []);

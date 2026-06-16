@@ -10,7 +10,7 @@ const require = createRequire(import.meta.url);
 
 const { Session } = require('../engine/session.js');
 const { login } = require('../engine/qr-login.js');
-const { QzoneClient, AuthInvalidError } = require('../engine/client.js');
+const { QzoneClient, AuthInvalidError, CircuitOpenError } = require('../engine/client.js');
 const { ProgressStore, STATUSES, MODULES } = require('../engine/progress.js');
 const { Downloader, sanitizeFilename, SANITIZE_RULES } = require('../engine/downloader.js');
 const { collectUserInfo, updateUserCounts } = require('../engine/collectors/common.js');
@@ -18,7 +18,7 @@ const { collectMessages } = require('../engine/collectors/messages.js');
 const { collectBlogs } = require('../engine/collectors/blogs.js');
 const { collectBoards } = require('../engine/collectors/boards.js');
 const { collectVideos } = require('../engine/collectors/videos.js');
-const { collectPhotos } = require('../engine/collectors/photos.js');
+const { collectPhotos, repairAlbumPhotoFiles } = require('../engine/collectors/photos.js');
 const { collectFriends } = require('../engine/collectors/friends.js');
 const { collectDiaries } = require('../engine/collectors/diaries.js');
 const { collectFavorites } = require('../engine/collectors/favorites.js');
@@ -155,9 +155,13 @@ program
   .option('--no-convert', 'Skip automatic conversion to viewer format')
   .option('--no-enrich-comments', 'Skip comment enrichment (enabled by default)')
   .option('--no-enrich-likes', 'Skip like enrichment (enabled by default)')
+  .option('--enrich-visitors', 'Also fetch per-item visitors (API-heavy; off by default)', false)
   .option('--sample <pages>', 'Sample mode: limit pages per module', '0')
   .option('--inline-concurrency <n>', 'Concurrent inline resource downloads', '6')
   .option('--incremental', 'Only fetch new items (ID-based dedup against existing data)', false)
+  .option('--fill-missing', 'No list fetching at all; only fill missing per-item data (comments, likes, visitors, blog/diary detail, read counts) on items already on disk', false)
+  .option('--min-gap <ms>', 'Minimum gap between API requests (anti-ban throttle)', '500')
+  .option('--rl-threshold <n>', 'Abort run after N consecutive rate-limit responses (0=never)', '3')
   .action(async (targetUinStr, opts) => {
     const targetUin = Number(targetUinStr);
     if (!targetUin || !Number.isFinite(targetUin)) {
@@ -176,7 +180,16 @@ program
       process.exit(1);
     }
 
-    const client = new QzoneClient({ session, config: { dataDir } });
+    const minGap = parseInt(opts.minGap, 10);
+    const rlThreshold = parseInt(opts.rlThreshold, 10);
+    const client = new QzoneClient({
+      session,
+      config: {
+        dataDir,
+        minRequestGapMs: Number.isFinite(minGap) ? minGap : 500,
+        rlCircuitThreshold: Number.isFinite(rlThreshold) ? rlThreshold : 3,
+      },
+    });
     const logger = makeLogger(`uin=${targetUin}`);
     const download = opts.download !== false;
     const doPhotos = opts.photos !== false;
@@ -202,10 +215,22 @@ program
     const counts: Record<string, number> = {};
 
     const incremental = !!opts.incremental;
+    const fillMissing = !!opts.fillMissing;
+    // In fill-missing mode every collector runs with listFetch=false (no list
+    // pagination at all). Modules whose per-item data is filled by the
+    // enrichment pass below (comments/likes/visitors) need nothing from the
+    // collector, so they're skipped outright to save even a disk read. The rest
+    // (blogs/diaries detail, favorites/friends/visitors snapshots) run with
+    // listFetch=false to fill/keep their own data without any API calls.
+    const fillMissingSkip = new Set(['messages', 'boards', 'videos', 'shares', 'photos']);
 
     const runModule = async (label: string, fn: () => Promise<any>) => {
       const mod = progress.module(label);
-      if (mod.status === 'done' && !incremental) {
+      if (fillMissing && label !== 'common' && fillMissingSkip.has(label)) {
+        logger.info(`--- ${label} --- (fill-missing: skip list collection)`);
+        return { status: 'skipped', total: mod.totalReported, fetched: 0, items: [] };
+      }
+      if (mod.status === 'done' && !incremental && !fillMissing) {
         logger.info(`--- ${label} --- (already done, skipping)`);
         return { status: 'done', total: mod.totalReported, fetched: mod.fetched, items: [] };
       }
@@ -219,6 +244,7 @@ program
         return r;
       } catch (err: any) {
         if (err instanceof AuthInvalidError) throw err;
+        if (err instanceof CircuitOpenError) throw err; // abort whole user, don't swallow
         logger.error(`${label} error: ${err.message}`);
         return { status: 'error', total: 0, fetched: 0, items: [] };
       }
@@ -316,7 +342,7 @@ program
 
       // 3) Blogs
       const b = await runModule('blogs', () =>
-        collectBlogs({ client, targetUin, outputRoot: userDir, progress, logger, pageLimit: samplePages, incremental })
+        collectBlogs({ client, targetUin, outputRoot: userDir, progress, logger, pageLimit: samplePages, incremental, listFetch: !fillMissing })
       );
       counts.blogs = b.fetched;
       if (b.fetched > 0) await inlineNow('blogs');
@@ -337,20 +363,20 @@ program
 
       // 6) Friends
       const f = await runModule('friends', () =>
-        collectFriends({ client, targetUin, outputRoot: userDir, progress, logger })
+        collectFriends({ client, targetUin, outputRoot: userDir, progress, logger, listFetch: !fillMissing })
       );
       counts.friends = f.fetched;
 
       // 7) Diaries
       const d = await runModule('diaries', () =>
-        collectDiaries({ client, targetUin, outputRoot: userDir, progress, logger })
+        collectDiaries({ client, targetUin, outputRoot: userDir, progress, logger, withDetail: fillMissing, listFetch: !fillMissing })
       );
       counts.diaries = d.fetched;
       if (d.fetched > 0) await inlineNow('diaries');
 
       // 8) Favorites
       const fav = await runModule('favorites', () =>
-        collectFavorites({ client, targetUin, outputRoot: userDir, progress, logger })
+        collectFavorites({ client, targetUin, outputRoot: userDir, progress, logger, listFetch: !fillMissing })
       );
       counts.favorites = fav.fetched;
       if (fav.fetched > 0) await inlineNow('favorites');
@@ -378,7 +404,7 @@ program
 
       // 11) Visitors
       const vs = await runModule('visitors', () =>
-        collectVisitors({ client, targetUin, outputRoot: userDir, progress, logger })
+        collectVisitors({ client, targetUin, outputRoot: userDir, progress, logger, listFetch: !fillMissing })
       );
       counts.visitors = Math.max(vs.total || 0, vs.fetched || 0);
 
@@ -426,9 +452,22 @@ program
                 writeData(afPath, photos);
               }
             } catch (e: any) {
+              if (e instanceof CircuitOpenError || e instanceof AuthInvalidError) throw e;
               logger.warn(`[enrich] album ${af} error: ${e.message}`);
             }
           }
+        }
+        // Video comments
+        const videoItems = v.items?.length ? v.items : loadFromDisk('videos.json');
+        if (videoItems.length) {
+          await enrichers.enrichVideoComments({ client, targetUin, items: videoItems, logger });
+          writeData(join(userDir, 'data', 'videos.json'), videoItems);
+        }
+        // Share comments
+        const shareItems = sh.items?.length ? sh.items : loadFromDisk('shares.json');
+        if (shareItems.length) {
+          await enrichers.enrichShareComments({ client, targetUin, items: shareItems, logger });
+          writeData(join(userDir, 'data', 'shares.json'), shareItems);
         }
       }
 
@@ -452,17 +491,82 @@ program
           });
           writeData(join(userDir, 'data', 'blogs.json'), blogItemsL);
         }
+        // Share likes
+        const shareItemsL = sh.items?.length ? sh.items : loadFromDisk('shares.json');
+        if (shareItemsL.length) {
+          await enrichers.enrichLikes({
+            client, items: shareItemsL,
+            buildKey: (it: any) => buildUniKey('share', targetUin, it.id || it.shareid),
+            label: 'shares', logger,
+          });
+          writeData(join(userDir, 'data', 'shares.json'), shareItemsL);
+        }
+        // Photo likes (per-album files under data/photos/)
+        const photosDirL = join(userDir, 'data', 'photos');
+        if (existsSync(photosDirL)) {
+          const { readdirSync } = await import('node:fs');
+          const albumFilesL = readdirSync(photosDirL).filter((f: string) => f.endsWith('.json') && f !== 'albums.json');
+          for (const af of albumFilesL) {
+            const afPath = join(photosDirL, af);
+            try {
+              const raw = JSON.parse(readFileSync(afPath, 'utf-8'));
+              const photos = Array.isArray(raw) ? raw : raw.photoList || [];
+              if (!photos.length) continue;
+              await enrichers.enrichLikes({
+                client, items: photos,
+                buildKey: (it: any) => buildUniKey('photo', targetUin, it.lloc || it.picKey),
+                label: `photos/${af}`, logger,
+              });
+              writeData(afPath, photos);
+            } catch (e: any) {
+              if (e instanceof CircuitOpenError || e instanceof AuthInvalidError) throw e;
+              logger.warn(`[enrich] photo-likes ${af} error: ${e.message}`);
+            }
+          }
+        }
       }
 
-      // Wait for photo download queue
+      // Per-item visitors (who viewed each post). API-heavy; opt-in only.
+      if (opts.enrichVisitors) {
+        logger.info('--- enrich.visitors (per-item) ---');
+        const msgItemsV = m.items?.length ? m.items : loadFromDisk('messages.json');
+        if (msgItemsV.length) {
+          await enrichers.enrichSingleVisitors({
+            client, targetUin, items: msgItemsV, appid: 311,
+            targetIdOf: (it: any) => it.tid, label: 'messages', logger,
+          });
+          writeData(join(userDir, 'data', 'messages.json'), msgItemsV);
+        }
+        const blogItemsV = b.items?.length ? b.items : loadFromDisk('blogs.json');
+        if (blogItemsV.length) {
+          await enrichers.enrichSingleVisitors({
+            client, targetUin, items: blogItemsV, appid: 2,
+            targetIdOf: (it: any) => it.blogId || it.blogid, label: 'blogs', logger,
+          });
+          writeData(join(userDir, 'data', 'blogs.json'), blogItemsV);
+        }
+      }
+
+      // Wait for photo download queue, then run the data-driven album media
+      // repair (downloads any album cover/photo whose local file is missing).
+      // This runs in every mode — including fill-missing and "photos already
+      // done" re-runs — so album media is self-healing like inline media.
       if (download && doPhotos) {
         logger.info('Waiting for photo download queue...');
         await downloader.drain();
+        try {
+          await repairAlbumPhotoFiles({ outputRoot: userDir, downloader, logger });
+        } catch (e: any) {
+          logger.warn(`[photos] media repair error: ${e.message}`);
+        }
         logger.info('All downloads complete');
       }
 
-      // 13) Update user counts
-      updateUserCounts({ outputRoot: userDir, counts, name: realName, uin: targetUin, logger });
+      // 13) Update user counts (skip in fill-missing: skipped collectors returned 0
+      //     and must not clobber the real counts already in user.json)
+      if (!fillMissing) {
+        updateUserCounts({ outputRoot: userDir, counts, name: realName, uin: targetUin, logger });
+      }
 
       // 14) Augment
       logger.info('--- augment ---');
@@ -618,9 +722,15 @@ program
 
     } catch (err: any) {
       if (err instanceof AuthInvalidError) {
-        logger.error('Session expired. Please run "qzone-tools login" again.');
+        logger.error('Session expired. Please re-login (desktop login shell or "qzone-tools login"), then re-run — progress is saved.');
         progress.setOverall('error');
-        process.exit(1);
+        process.exit(77); // distinct code so backup-all pauses the whole batch for re-login
+      }
+      if (err instanceof CircuitOpenError) {
+        logger.error(`Rate-limit circuit tripped (${err.reason}). Aborting this user. ` +
+          `Wait a while (recommend hours), then re-run to resume — progress is saved.`);
+        progress.setOverall('rate_limited');
+        process.exit(75); // distinct code so backup-all stops the whole batch
       }
       logger.error(`Unexpected error: ${err.stack || err.message}`);
       progress.setOverall('error');
@@ -641,9 +751,13 @@ program
   .option('--no-convert', 'Skip conversion to viewer format')
   .option('--no-enrich-comments', 'Skip comment enrichment (enabled by default)')
   .option('--no-enrich-likes', 'Skip like enrichment (enabled by default)')
+  .option('--enrich-visitors', 'Also fetch per-item visitors (API-heavy; off by default)', false)
   .option('--skip <uins>', 'Comma-separated UINs to skip')
   .option('--sample <pages>', 'Sample mode: limit pages per module', '0')
   .option('--incremental', 'Only fetch new items (ID-based dedup)', false)
+  .option('--fill-missing', 'No list fetching at all; only fill missing per-item data on items already on disk', false)
+  .option('--min-gap <ms>', 'Minimum gap between API requests (anti-ban throttle)', '500')
+  .option('--rl-threshold <n>', 'Stop the batch after N consecutive rate-limit responses (0=never)', '3')
   .option('--access-file <path>', 'Optional access_status.json (from check-access): skip inaccessible targets')
   .action(async (opts) => {
     const dataDir = resolve(opts.dataDir);
@@ -747,6 +861,18 @@ program
         logger.info(`[${i + 1}/${items.length}] SKIP ${uin} (${name}) - inaccessible per access file`);
         continue;
       }
+      // fill-missing only tops up accounts that ALREADY have a real backup on
+      // disk; it must never fabricate a new (empty) backup for a never-collected
+      // friend (e.g. service accounts). Such targets need a full backup instead.
+      if (opts.fillMissing) {
+        const hasBackup = existsSync(opts.output) && readdirSync(opts.output).some(
+          (d: string) => d.startsWith(`${uin}_`) && existsSync(join(opts.output, d, 'data'))
+        );
+        if (!hasBackup) {
+          logger.info(`[${i + 1}/${items.length}] SKIP ${uin} (${name}) - no existing backup (fill-missing only tops up existing ones)`);
+          continue;
+        }
+      }
 
       logger.info(`[${i + 1}/${items.length}] Backing up ${uin} (${name})`);
 
@@ -757,8 +883,12 @@ program
       if (!opts.convert) args.push('--no-convert');
       if (opts.enrichComments === false) args.push('--no-enrich-comments');
       if (opts.enrichLikes === false) args.push('--no-enrich-likes');
+      if (opts.enrichVisitors) args.push('--enrich-visitors');
       if (opts.incremental) args.push('--incremental');
+      if (opts.fillMissing) args.push('--fill-missing');
       if (opts.sample !== '0') args.push('--sample', opts.sample);
+      if (opts.minGap) args.push('--min-gap', String(opts.minGap));
+      if (opts.rlThreshold != null) args.push('--rl-threshold', String(opts.rlThreshold));
 
       const t0 = Date.now();
       try {
@@ -766,6 +896,21 @@ program
         const cmd = `npx tsx "${thisScript}" ${args.join(' ')}`;
         execSync(cmd, { stdio: 'inherit', cwd: projRoot });
       } catch (e: any) {
+        // Exit code 75 = the child tripped the rate-limit circuit breaker.
+        // Stop the whole batch immediately rather than marching into a ban.
+        if (e && e.status === 75) {
+          logger.error(`Rate-limit circuit tripped while backing up ${uin}. ` +
+            `Stopping the batch. Wait a while (hours), then re-run backup-all to resume — progress is saved.`);
+          break;
+        }
+        // Exit code 77 = the child's session (p_skey) expired. Every remaining
+        // user would fail the same way, so pause the whole batch and prompt for
+        // re-login instead of marching through hundreds of doomed attempts.
+        if (e && e.status === 77) {
+          logger.error(`Session expired while backing up ${uin}. ` +
+            `Pausing the batch. Re-login (desktop login shell), then re-run backup-all to resume — progress is saved.`);
+          break;
+        }
         logger.error(`Failed to backup ${uin}: ${e.message}`);
       }
 

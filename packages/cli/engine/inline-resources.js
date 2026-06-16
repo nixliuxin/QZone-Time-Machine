@@ -121,30 +121,41 @@ async function downloadOne({ url, dst, minBytes = 200, retries = 1, client = nul
 //   image.custom_filepath = "media/messages/images/<sha1>.jpg"
 //   video.custom_filepath = "media/messages/videos/<sha1>.mp4"
 //   poster.custom_pre_filepath = "media/messages/posters/<sha1>.jpg"
+// A task is (re)created when the field is unwritten OR the local file is
+// actually missing (self-heals manual deletion / disk corruption). The
+// existsSync is a cheap local stat and never re-downloads files that exist.
+function needsTask(parent, fileField, dst) {
+  return !parent[fileField] || !fs.existsSync(dst);
+}
+
 function imageTasks(parent, moduleDir, relPrefix) {
   const tasks = [];
   let big = parent.url2 || parent.url1 || parent.custom_url || parent.url || parent.b_url;
   if (big && /^https?:/.test(big)) big = preferOriginal(big);
-  if (big && /^https?:/.test(big) && !parent.custom_filepath) {
+  if (big && /^https?:/.test(big)) {
     const ext = extFromUrl(big, 'jpg');
     const fname = `${sha1Of(big)}.${ext}`;
-    tasks.push({
-      url: big, kind: 'image',
-      dst: path.join(moduleDir, 'images', fname),
-      relpath: `${relPrefix}/images/${fname}`,
-      writeFile: 'custom_filepath', writeUrl: 'custom_url', parent,
-    });
+    const dst = path.join(moduleDir, 'images', fname);
+    if (needsTask(parent, 'custom_filepath', dst)) {
+      tasks.push({
+        url: big, kind: 'image', dst,
+        relpath: `${relPrefix}/images/${fname}`,
+        writeFile: 'custom_filepath', writeUrl: 'custom_url', parent,
+      });
+    }
   }
   let small = parent.smallurl || parent.pre || parent.custom_pre_url;
-  if (small && /^https?:/.test(small) && !parent.custom_pre_filepath && small !== big) {
+  if (small && /^https?:/.test(small) && small !== big) {
     const ext = extFromUrl(small, 'jpg');
     const fname = `${sha1Of(small)}.${ext}`;
-    tasks.push({
-      url: small, kind: 'image',
-      dst: path.join(moduleDir, 'images', fname),
-      relpath: `${relPrefix}/images/${fname}`,
-      writeFile: 'custom_pre_filepath', writeUrl: 'custom_pre_url', parent,
-    });
+    const dst = path.join(moduleDir, 'images', fname);
+    if (needsTask(parent, 'custom_pre_filepath', dst)) {
+      tasks.push({
+        url: small, kind: 'image', dst,
+        relpath: `${relPrefix}/images/${fname}`,
+        writeFile: 'custom_pre_filepath', writeUrl: 'custom_pre_url', parent,
+      });
+    }
   }
   return tasks;
 }
@@ -152,27 +163,31 @@ function imageTasks(parent, moduleDir, relPrefix) {
 function videoTasks(parent, moduleDir, relPrefix) {
   const tasks = [];
   const mp4 = parent.url3 || parent.custom_url || parent.video_url;
-  if (mp4 && /^https?:/.test(mp4) && !parent.custom_filepath) {
+  if (mp4 && /^https?:/.test(mp4)) {
     const ext = extFromUrl(mp4, 'mp4');
     const fname = `${sha1Of(parent.video_id || mp4)}.${ext}`;
-    tasks.push({
-      url: mp4, kind: 'video',
-      dst: path.join(moduleDir, 'videos', fname),
-      relpath: `${relPrefix}/videos/${fname}`,
-      writeFile: 'custom_filepath', writeUrl: 'custom_url', parent,
-      minBytes: 5_000,
-    });
+    const dst = path.join(moduleDir, 'videos', fname);
+    if (needsTask(parent, 'custom_filepath', dst)) {
+      tasks.push({
+        url: mp4, kind: 'video', dst,
+        relpath: `${relPrefix}/videos/${fname}`,
+        writeFile: 'custom_filepath', writeUrl: 'custom_url', parent,
+        minBytes: 5_000,
+      });
+    }
   }
   const poster = parent.url1 || parent.pic_url || parent.custom_pre_url;
-  if (poster && /^https?:/.test(poster) && !parent.custom_pre_filepath) {
+  if (poster && /^https?:/.test(poster)) {
     const ext = extFromUrl(poster, 'jpg');
     const fname = `${sha1Of(poster)}.${ext}`;
-    tasks.push({
-      url: poster, kind: 'poster',
-      dst: path.join(moduleDir, 'posters', fname),
-      relpath: `${relPrefix}/posters/${fname}`,
-      writeFile: 'custom_pre_filepath', writeUrl: 'custom_pre_url', parent,
-    });
+    const dst = path.join(moduleDir, 'posters', fname);
+    if (needsTask(parent, 'custom_pre_filepath', dst)) {
+      tasks.push({
+        url: poster, kind: 'poster', dst,
+        relpath: `${relPrefix}/posters/${fname}`,
+        writeFile: 'custom_pre_filepath', writeUrl: 'custom_pre_url', parent,
+      });
+    }
   }
   return tasks;
 }
@@ -180,27 +195,31 @@ function videoTasks(parent, moduleDir, relPrefix) {
 function audioTasks(parent, moduleDir, relPrefix) {
   const tasks = [];
   const mp3 = parent.playurl || parent.url || parent.custom_url;
-  if (mp3 && /^https?:/.test(mp3) && !parent.custom_filepath) {
+  if (mp3 && /^https?:/.test(mp3)) {
     const ext = extFromUrl(mp3, 'mp3');
     const fname = `${sha1Of(mp3)}.${ext}`;
-    tasks.push({
-      url: mp3, kind: 'audio',
-      dst: path.join(moduleDir, 'audios', fname),
-      relpath: `${relPrefix}/audios/${fname}`,
-      writeFile: 'custom_filepath', writeUrl: 'custom_url', parent,
-      minBytes: 1_000,
-    });
+    const dst = path.join(moduleDir, 'audios', fname);
+    if (needsTask(parent, 'custom_filepath', dst)) {
+      tasks.push({
+        url: mp3, kind: 'audio', dst,
+        relpath: `${relPrefix}/audios/${fname}`,
+        writeFile: 'custom_filepath', writeUrl: 'custom_url', parent,
+        minBytes: 1_000,
+      });
+    }
   }
   const cover = parent.image || parent.cover_url;
-  if (cover && /^https?:/.test(cover) && !parent.custom_image_filepath) {
+  if (cover && /^https?:/.test(cover)) {
     const ext = extFromUrl(cover, 'jpg');
     const fname = `${sha1Of(cover)}.${ext}`;
-    tasks.push({
-      url: cover, kind: 'image',
-      dst: path.join(moduleDir, 'images', fname),
-      relpath: `${relPrefix}/images/${fname}`,
-      writeFile: 'custom_image_filepath', writeUrl: null, parent,
-    });
+    const dst = path.join(moduleDir, 'images', fname);
+    if (needsTask(parent, 'custom_image_filepath', dst)) {
+      tasks.push({
+        url: cover, kind: 'image', dst,
+        relpath: `${relPrefix}/images/${fname}`,
+        writeFile: 'custom_image_filepath', writeUrl: null, parent,
+      });
+    }
   }
   return tasks;
 }
@@ -208,15 +227,17 @@ function audioTasks(parent, moduleDir, relPrefix) {
 function magicTasks(parent, moduleDir, relPrefix) {
   const tasks = [];
   const u = parent.custom_url || parent.url1 || parent.url;
-  if (u && /^https?:/.test(u) && !parent.custom_filepath) {
+  if (u && /^https?:/.test(u)) {
     const ext = extFromUrl(u, 'gif');
     const fname = `${sha1Of(u)}.${ext}`;
-    tasks.push({
-      url: u, kind: 'image',
-      dst: path.join(moduleDir, 'magics', fname),
-      relpath: `${relPrefix}/magics/${fname}`,
-      writeFile: 'custom_filepath', writeUrl: 'custom_url', parent,
-    });
+    const dst = path.join(moduleDir, 'magics', fname);
+    if (needsTask(parent, 'custom_filepath', dst)) {
+      tasks.push({
+        url: u, kind: 'image', dst,
+        relpath: `${relPrefix}/magics/${fname}`,
+        writeFile: 'custom_filepath', writeUrl: 'custom_url', parent,
+      });
+    }
   }
   return tasks;
 }

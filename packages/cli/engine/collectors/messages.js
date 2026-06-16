@@ -10,12 +10,15 @@
 'use strict';
 
 const path = require('path');
-const { writeData, readData, randomSleep, mergeByIds, buildIdSet } = require('./_util.js');
+const { writeData, readData, randomSleep, buildIdSet } = require('./_util.js');
 const messagesApi = require('../api/messages.js');
 const { RateLimitError, EmptyDataError, NoAccessError, AuthInvalidError } =
   require('../client.js');
 
 const EMPTY_PAGE_THRESHOLD = 3;
+// When resuming, the first page(s) overlap with known data. Stop after this many
+// consecutive fully-known pages so we don't keep scanning an already-complete list.
+const KNOWN_PAGE_THRESHOLD = 2;
 const PAGE_SLEEP_MS = 1500;
 
 /**
@@ -32,40 +35,42 @@ async function collectMessages({
   pageLimit = 0,
   incremental = false,
 }) {
-  const all = [];
   let totalReported = 0;
   let consecutiveEmpty = 0;
+  let consecutiveKnown = 0;
   let rateLimited = false;
 
   const outFile = path.join(outputRoot, 'data', 'messages.json');
 
-  // In incremental mode: load existing data and build ID set
-  let existingIds = null;
-  let existingItems = [];
-  if (incremental) {
-    const r = readData(outFile, logger);
-    if (r.ok && Array.isArray(r.value)) {
-      existingItems = r.value;
-      existingIds = buildIdSet(existingItems, 'messages');
-      logger.info(`[messages] incremental: ${existingItems.length} existing items, ${existingIds.size} unique IDs`);
-    }
+  // Unified "fill-missing" model (no full re-scan from page 0):
+  //   - Load whatever already exists on disk.
+  //   - If the list is already complete (have >= totalReported), skip the
+  //     list fetch entirely (zero requests) and let enrichment fill gaps.
+  //   - Otherwise resume FORWARD from the page where existing data ends and
+  //     append only the still-missing (older) items, deduped by tid.
+  const r = readData(outFile, logger);
+  const existingItems = (r.ok && Array.isArray(r.value)) ? r.value : [];
+  const existingIds = buildIdSet(existingItems, 'messages');
+  if (!r.ok && r.raw) {
+    logger.warn(`[messages] existing JSON unparseable; treating as empty`);
+  }
+  const have = existingItems.length;
+  const progTotal = progress.module('messages').totalReported || 0;
+
+  // Already complete -> skip list fetch; existing items still flow to enrichment.
+  if (progTotal > 0 && have >= progTotal && pageLimit === 0) {
+    logger.info(`[messages] already complete (${have}/${progTotal}); skipping list fetch`);
+    progress.finishModule('messages', 'done');
+    return { status: 'done', total: progTotal, fetched: have, rateLimited: false, items: existingItems };
   }
 
-  let startPage = incremental ? 0 : (progress.module('messages').lastPage ?? -1) + 1;
-  if (!incremental && startPage > 0) {
-    logger.info(`[messages] resuming from page ${startPage}`);
-    const r = readData(outFile, logger);
-    if (r.ok && Array.isArray(r.value)) {
-      all.push(...r.value);
-    } else if (r.raw) {
-      startPage = 0;
-      all.length = 0;
-      progress.module('messages').lastPage = -1;
-      logger.warn(`[messages] existing JSON unparseable, resetting startPage=0 for full re-fetch`);
-    }
+  // Start from existing data and resume forward to fill the missing tail.
+  const all = existingItems.slice();
+  let startPage = Math.floor(have / pageSize);
+  if (have > 0) {
+    logger.info(`[messages] fill-missing: ${have} existing (total≈${progTotal || '?'}), resuming forward from page ${startPage}`);
   }
 
-  let hitExistingBoundary = false;
   const maxPage = pageLimit > 0 ? startPage + pageLimit : 10000;
   for (let page = startPage; page < maxPage; page++) {
     let json;
@@ -99,44 +104,27 @@ async function collectMessages({
     } else {
       consecutiveEmpty = 0;
 
-      if (incremental && existingIds) {
-        const newItems = list.filter(it => !existingIds.has(String(it.tid)));
-        if (newItems.length === 0) {
-          logger.info(`[messages] page ${page}: all ${list.length} items already known, stopping incremental`);
-          hitExistingBoundary = true;
-          break;
-        }
-        if (newItems.length < list.length) {
-          logger.info(`[messages] page ${page}: ${newItems.length} new, ${list.length - newItems.length} known`);
-        }
-        all.push(...newItems);
-      } else {
-        all.push(...list);
-      }
+      // Dedup against everything already known (existing on disk + added this run).
+      const newItems = list.filter(it => !existingIds.has(String(it.tid)));
+      for (const it of newItems) existingIds.add(String(it.tid));
 
-      progress.markPageDone('messages', page, all.length, totalReported);
-      writeData(outFile, all);
-      logger.info(`[messages] page ${page}: +${list.length} => total ${all.length}/${totalReported || '?'}`);
-      if (totalReported && all.length >= totalReported) break;
+      if (newItems.length === 0) {
+        // Overlap with already-known data. Keep advancing to reach the missing
+        // tail, but guard against runaway loops when the list is fully caught up.
+        consecutiveKnown++;
+        logger.info(`[messages] page ${page}: all ${list.length} known (${consecutiveKnown}/${KNOWN_PAGE_THRESHOLD})`);
+        if (totalReported && all.length >= totalReported) break;
+        if (consecutiveKnown >= KNOWN_PAGE_THRESHOLD) break;
+      } else {
+        consecutiveKnown = 0;
+        all.push(...newItems);
+        progress.markPageDone('messages', page, all.length, totalReported);
+        writeData(outFile, all);
+        logger.info(`[messages] page ${page}: +${newItems.length} new (${list.length - newItems.length} known) => total ${all.length}/${totalReported || '?'}`);
+        if (totalReported && all.length >= totalReported) break;
+      }
     }
     await randomSleep(PAGE_SLEEP_MS);
-  }
-
-  // In incremental mode, merge new items (all) with existing items
-  if (incremental && existingItems.length > 0 && all.length > 0) {
-    const { merged, addedCount } = mergeByIds(existingItems, all, 'messages');
-    logger.info(`[messages] incremental merge: ${addedCount} new items added to ${existingItems.length} existing`);
-    writeData(outFile, merged);
-    const status = rateLimited ? 'rate_limited' : 'done';
-    progress.finishModule('messages', status, rateLimited ? 'consecutive empty pages' : null);
-    return { status, total: totalReported || merged.length, fetched: merged.length, rateLimited, items: merged };
-  }
-
-  if (incremental && existingItems.length > 0 && all.length === 0) {
-    logger.info(`[messages] incremental: no new items found`);
-    const status = 'done';
-    progress.finishModule('messages', status);
-    return { status, total: totalReported || existingItems.length, fetched: existingItems.length, rateLimited: false, items: existingItems };
   }
 
   writeData(outFile, all);
