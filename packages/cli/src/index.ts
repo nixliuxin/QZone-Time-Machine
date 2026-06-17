@@ -211,6 +211,27 @@ program
     console.log(`Cookies saved to: ${cookiesFile} (${cookies.length} cookies)`);
   });
 
+// ─── sync scope resolution ───
+//
+// "scope" is the single knob describing how deep a sync goes:
+//   full  (default) — rescan item lists (discover newly-added/missing whole
+//                     items) AND backfill per-item details/media.
+//   topup           — trust the local lists as complete; only backfill missing
+//                     per-item data (comments/likes/visitors/detail/media) on
+//                     items already on disk. API-light; skips the list rescan
+//                     (the step most likely to trip rate limits).
+// The legacy boolean flag `--fill-missing` is kept as a hidden alias for
+// `--scope topup` so existing scripts/habits keep working.
+function resolveScope(opts: any): 'full' | 'topup' {
+  const raw = (opts.scope ?? '').toString().trim().toLowerCase();
+  if (raw && raw !== 'full' && raw !== 'topup') {
+    console.error(`Invalid --scope "${opts.scope}". Use "full" or "topup".`);
+    process.exit(1);
+  }
+  if (opts.fillMissing) return 'topup'; // legacy alias wins
+  return raw === 'topup' ? 'topup' : 'full';
+}
+
 // ─── backup (single user) ───
 
 program
@@ -229,7 +250,8 @@ program
   .option('--sample <pages>', 'Sample mode: limit pages per module', '0')
   .option('--inline-concurrency <n>', 'Concurrent inline resource downloads', '6')
   .option('--incremental', 'Only fetch new items (ID-based dedup against existing data)', false)
-  .option('--fill-missing', 'No list fetching at all; only fill missing per-item data (comments, likes, visitors, blog/diary detail, read counts) on items already on disk', false)
+  .option('--scope <mode>', 'Sync depth: "full" (rescan lists + backfill details/media) or "topup" (trust local lists; only backfill missing per-item data; API-light)', 'full')
+  .option('--fill-missing', '[deprecated] alias for --scope topup', false)
   .option('--min-gap <ms>', 'Minimum gap between API requests (anti-ban throttle)', '500')
   .option('--rl-threshold <n>', 'Abort run after N consecutive rate-limit responses (0=never)', '3')
   .action(async (targetUinStr, opts) => {
@@ -285,8 +307,10 @@ program
     const counts: Record<string, number> = {};
 
     const incremental = !!opts.incremental;
-    const fillMissing = !!opts.fillMissing;
-    // In fill-missing mode every collector runs with listFetch=false (no list
+    const scope = resolveScope(opts);
+    const fillMissing = scope === 'topup';
+    if (fillMissing) logger.info('scope=topup (trust local lists; backfill missing per-item data only)');
+    // In topup scope every collector runs with listFetch=false (no list
     // pagination at all). Modules whose per-item data is filled by the
     // enrichment pass below (comments/likes/visitors) need nothing from the
     // collector, so they're skipped outright to save even a disk read. The rest
@@ -834,7 +858,8 @@ program
   .option('--skip <uins>', 'Comma-separated UINs to skip')
   .option('--sample <pages>', 'Sample mode: limit pages per module', '0')
   .option('--incremental', 'Only fetch new items (ID-based dedup)', false)
-  .option('--fill-missing', 'No list fetching at all; only fill missing per-item data on items already on disk', false)
+  .option('--scope <mode>', 'Sync depth: "full" (rescan lists + backfill details/media) or "topup" (trust local lists; only backfill missing per-item data; API-light, only tops up existing backups)', 'full')
+  .option('--fill-missing', '[deprecated] alias for --scope topup', false)
   .option('--min-gap <ms>', 'Minimum gap between API requests (anti-ban throttle)', '500')
   .option('--rl-threshold <n>', 'Stop the batch after N consecutive rate-limit responses (0=never)', '3')
   .option('--access-file <path>', 'Optional access_status.json (from check-access): skip inaccessible targets')
@@ -866,6 +891,9 @@ program
 
     const skipSet = new Set((opts.skip || '').split(',').map((s: string) => s.trim()).filter(Boolean));
     const dailyLimit = parseInt(opts.dailyLimit, 10) || 0;
+    const scope = resolveScope(opts);
+    const fillMissing = scope === 'topup';
+    if (fillMissing) logger.info('scope=topup (only tops up existing backups; no list rescan)');
 
     // Optional: load an access-status file (from `check-access` or the legacy
     // friends_with_access.json) and skip targets that are not accessible.
@@ -940,15 +968,15 @@ program
         logger.info(`[${i + 1}/${items.length}] SKIP ${uin} (${name}) - inaccessible per access file`);
         continue;
       }
-      // fill-missing only tops up accounts that ALREADY have a real backup on
+      // topup only tops up accounts that ALREADY have a real backup on
       // disk; it must never fabricate a new (empty) backup for a never-collected
       // friend (e.g. service accounts). Such targets need a full backup instead.
-      if (opts.fillMissing) {
+      if (fillMissing) {
         const hasBackup = existsSync(opts.output) && readdirSync(opts.output).some(
           (d: string) => d.startsWith(`${uin}_`) && existsSync(join(opts.output, d, 'data'))
         );
         if (!hasBackup) {
-          logger.info(`[${i + 1}/${items.length}] SKIP ${uin} (${name}) - no existing backup (fill-missing only tops up existing ones)`);
+          logger.info(`[${i + 1}/${items.length}] SKIP ${uin} (${name}) - no existing backup (scope=topup only tops up existing ones)`);
           continue;
         }
       }
@@ -964,7 +992,7 @@ program
       if (opts.enrichLikes === false) args.push('--no-enrich-likes');
       if (opts.enrichVisitors) args.push('--enrich-visitors');
       if (opts.incremental) args.push('--incremental');
-      if (opts.fillMissing) args.push('--fill-missing');
+      if (fillMissing) args.push('--scope', 'topup');
       if (opts.sample !== '0') args.push('--sample', opts.sample);
       if (opts.minGap) args.push('--min-gap', String(opts.minGap));
       if (opts.rlThreshold != null) args.push('--rl-threshold', String(opts.rlThreshold));

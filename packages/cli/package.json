@@ -1,4 +1,4 @@
-﻿{
+{
   "name": "@qzone-tools/cli",
   "version": "0.2.0",
   "description": "QQ Zone backup CLI – login, collect, and download",

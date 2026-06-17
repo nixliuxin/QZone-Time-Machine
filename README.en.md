@@ -79,6 +79,23 @@ pnpm cli -- backup 123456789 -n "Nickname"
 pnpm cli -- convert ./old-backup ./output
 ```
 
+### Sync scope (`--scope`)
+
+`backup` / `backup-all` use `--scope` to control sync depth (both are always safe to re-run and resume automatically):
+
+- `--scope full` (default) — rescan the lists (discover newly-added/missing **whole** items) and backfill details + media. Prioritizes completeness.
+- `--scope topup` — trust the local lists as complete and **only backfill missing per-item data** (comments / likes / visitors / full content / media), skipping the list rescan (the step most likely to trip rate limits). Lowest API cost; only tops up accounts that already have a backup.
+
+```bash
+# Full sync (default)
+pnpm cli -- backup 123456789 -n "Nickname"
+
+# Light top-up: only fill gaps on an existing backup, no list rescan
+pnpm cli -- backup 123456789 -n "Nickname" --scope topup
+```
+
+> The old `--fill-missing` flag is kept as a deprecated alias for `--scope topup`.
+
 ## Output Structure
 
 Each backed-up user produces a self-contained directory:

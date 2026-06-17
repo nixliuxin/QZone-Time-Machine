@@ -21,6 +21,22 @@ const { randomSleep } = require('./_util.js');
 const PAGE_SLEEP_MS = 1200;
 
 /**
+ * Progress logger for per-item enrichment loops.
+ * Logs a start line (when there is work) and a line every `every` processed items.
+ * Returns a tick() to call once per item that actually needed work.
+ */
+function makeProgress(logger, label, kind, todo, every = 25) {
+  if (todo > 0) logger.info(`[enrich] ${label} ${kind}: start — ${todo} items need fetch`);
+  let done = 0;
+  return () => {
+    done++;
+    if (every > 0 && todo > 0 && done % every === 0) {
+      logger.info(`[enrich] ${label} ${kind}: ${done}/${todo}`);
+    }
+  };
+}
+
+/**
  * Generic paginated comment fetcher: calls fetcher(page) until
  * accumulated list length >= targetCount or an empty list is returned.
  * fetcher: async (page) => { list:[], total:Number }
@@ -60,6 +76,8 @@ async function pullCommentsPaged({
 
 async function enrichMessageComments({ client, targetUin, items, logger = console }) {
   let touched = 0;
+  const todo = items.filter(m => (m.cmtnum || m.cmtTotal || 0) > (m.commentlist || []).length).length;
+  const tick = makeProgress(logger, 'messages', 'comments', todo);
   for (const m of items) {
     const cur = (m.commentlist || []).length;
     const total = m.cmtnum || m.cmtTotal || 0;
@@ -83,6 +101,7 @@ async function enrichMessageComments({ client, targetUin, items, logger = consol
     m.commentlist = list;
     m.comments = list;
     touched++;
+    tick();
   }
   if (touched) logger.info(`[enrich] messages comment enrichment: ${touched} items`);
   return touched;
@@ -90,6 +109,8 @@ async function enrichMessageComments({ client, targetUin, items, logger = consol
 
 async function enrichBlogComments({ client, targetUin, items, logger = console }) {
   let touched = 0;
+  const todo = items.filter(b => (b.commentNum || b.commentTotal || 0) > (b.comments || []).length).length;
+  const tick = makeProgress(logger, 'blogs', 'comments', todo);
   for (const b of items) {
     const cur = (b.comments || []).length;
     const total = b.commentNum || b.commentTotal || 0;
@@ -112,6 +133,7 @@ async function enrichBlogComments({ client, targetUin, items, logger = console }
     });
     b.comments = list;
     touched++;
+    tick();
   }
   if (touched) logger.info(`[enrich] blogs comment enrichment: ${touched} items`);
   return touched;
@@ -119,6 +141,14 @@ async function enrichBlogComments({ client, targetUin, items, logger = console }
 
 async function enrichAlbumPhotoComments({ client, targetUin, albums, logger = console }) {
   let touched = 0;
+  let todo = 0;
+  for (const album of albums) {
+    if (!Array.isArray(album.photoList)) continue;
+    for (const photo of album.photoList) {
+      if ((photo.cmtTotal || 0) > (photo.comments || []).length) todo++;
+    }
+  }
+  const tick = makeProgress(logger, 'album-photos', 'comments', todo);
   for (const album of albums) {
     if (!Array.isArray(album.photoList)) continue;
     for (const photo of album.photoList) {
@@ -144,6 +174,7 @@ async function enrichAlbumPhotoComments({ client, targetUin, albums, logger = co
       });
       photo.comments = list;
       touched++;
+      tick();
     }
   }
   if (touched) logger.info(`[enrich] album-photo comment enrichment: ${touched} photos`);
@@ -152,6 +183,11 @@ async function enrichAlbumPhotoComments({ client, targetUin, albums, logger = co
 
 async function enrichVideoComments({ client, targetUin, items, logger = console }) {
   let touched = 0;
+  const todo = items.filter(v => {
+    const tid = v.shuoshuoid || v.vid || v.tid || v.video_id;
+    return tid && (v.commentCount || v.cmtTotal || v.commentNum || 0) > (v.comments || []).length;
+  }).length;
+  const tick = makeProgress(logger, 'videos', 'comments', todo);
   for (const v of items) {
     // QZone videos are video-说说: comments live on the shuoshuo (shuoshuoid).
     const tid = v.shuoshuoid || v.vid || v.tid || v.video_id;
@@ -176,6 +212,7 @@ async function enrichVideoComments({ client, targetUin, items, logger = console 
     });
     v.comments = list;
     touched++;
+    tick();
   }
   if (touched) logger.info(`[enrich] videos comment enrichment: ${touched} items`);
   return touched;
@@ -183,6 +220,11 @@ async function enrichVideoComments({ client, targetUin, items, logger = console 
 
 async function enrichShareComments({ client, targetUin, items, logger = console }) {
   let touched = 0;
+  const todo = items.filter(s => {
+    const id = s.id || s.shareid;
+    return id && (s.commentNum || s.commentTotal || 0) > (s.comments || []).length;
+  }).length;
+  const tick = makeProgress(logger, 'shares', 'comments', todo);
   for (const s of items) {
     const id = s.id || s.shareid;
     const cur = (s.comments || []).length;
@@ -206,6 +248,7 @@ async function enrichShareComments({ client, targetUin, items, logger = console 
     });
     s.comments = list;
     touched++;
+    tick();
   }
   if (touched) logger.info(`[enrich] shares comment enrichment: ${touched} items`);
   return touched;
@@ -216,9 +259,15 @@ async function enrichShareComments({ client, targetUin, items, logger = console 
 /**
  * @param {Function} buildKey  function(item) => unikey
  */
-async function enrichLikes({ client, items, buildKey, label = 'item', logger = console }) {
+async function enrichLikes({ client, items, buildKey, label = 'item', logger = console, progressEvery = 50 }) {
   let touched = 0;
   let skipped = 0;
+  // Pre-count how many items actually need a like fetch so progress is meaningful.
+  const todo = items.reduce((n, it) => n + (Array.isArray(it.likes) ? 0 : 1), 0);
+  if (todo > 0) {
+    logger.info(`[enrich] ${label} likes: start — ${todo} to fetch, ${items.length - todo} already enriched`);
+  }
+  let done = 0;
   for (const it of items) {
     // Idempotency: enrichLikes is the only writer of the `likes` array, so its
     // mere presence (even empty = genuinely 0 likes) means this item was already
@@ -229,7 +278,7 @@ async function enrichLikes({ client, items, buildKey, label = 'item', logger = c
       continue;
     }
     const unikey = buildKey(it);
-    if (!unikey) continue;
+    if (!unikey) { done++; continue; }
     try {
       const j = await likesApi.getLikeList({ client, unikey });
       const data = j && j.data || {};
@@ -241,7 +290,11 @@ async function enrichLikes({ client, items, buildKey, label = 'item', logger = c
       if (e instanceof CircuitOpenError || e instanceof AuthInvalidError) throw e;
       // silently ignore failures
     }
-    if (touched % 20 === 0) await randomSleep(1000);
+    done++;
+    if (progressEvery > 0 && done % progressEvery === 0) {
+      logger.info(`[enrich] ${label} likes: ${done}/${todo} (fetched=${touched})`);
+    }
+    if (touched > 0 && touched % 20 === 0) await randomSleep(1000);
   }
   if (touched || skipped) logger.info(`[enrich] ${label} like enrichment: ${touched} fetched, ${skipped} already enriched`);
   return touched;
@@ -259,10 +312,13 @@ async function enrichSingleVisitors({
   maxPages = 5, pageSize = 10, logger = console,
 }) {
   let touched = 0;
+  const todo = items.filter(it => !(it.custom_visitor && it.custom_visitor.list?.length > 0) && targetIdOf(it)).length;
+  const tick = makeProgress(logger, label, 'visitors', todo);
   for (const it of items) {
     if (it.custom_visitor && it.custom_visitor.list?.length > 0) continue;
     const targetId = targetIdOf(it);
     if (!targetId) continue;
+    tick();
     const collected = [];
     for (let p = 0; p < maxPages; p++) {
       let json;

@@ -1,4 +1,4 @@
-﻿{
+{
   "name": "@qzone-tools/launcher",
   "version": "0.2.0",
   "description": "Zero-install local launcher: serves a packed QZone archive (store-mode zips) to the browser",
