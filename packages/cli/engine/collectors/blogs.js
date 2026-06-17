@@ -202,30 +202,49 @@ async function collectBlogs({
     }
     logger.info(`[blogs] detail fetch complete ${detailDone}/${all.length}`);
 
-    // Fetch read counts (batch API, max 500 IDs per call)
-    const blogIds = all.map(b => b.blogId || b.blogid || b.id).filter(Boolean);
+    // Fetch read counts (batch API). The endpoint is "all-or-nothing": one
+    // malformed id in the batch makes QZone reject the whole call with
+    // -4003 (日志参数错误). Some converted-from-old-data backups contain bogus
+    // sequential ids ("1","2","35"...) alongside real 10-digit blogIds, so we
+    // (1) keep only well-formed numeric ids (>=6 digits) and (2) chunk the
+    // request so any future bad input can only poison its own chunk.
+    const VALID_BLOGID = /^\d{6,}$/;
+    const blogIds = [...new Set(
+      all.map(b => b.blogId || b.blogid || b.id)
+        .filter(id => VALID_BLOGID.test(String(id)))
+        .map(String)
+    )];
+    const skippedReadCount = all.length - blogIds.length;
     if (blogIds.length > 0) {
-      try {
-        const rcJson = await blogsApi.getReadCount({ client, targetUin, blogIds });
-        const rcData = rcJson && rcJson.data || {};
-        const itemList = Array.isArray(rcData.itemList) ? rcData.itemList : [];
-        if (itemList.length > 0) {
-          const readMap = new Map();
+      const CHUNK = 100;
+      const readMap = new Map();
+      let chunkFail = 0;
+      for (let i = 0; i < blogIds.length; i += CHUNK) {
+        const chunk = blogIds.slice(i, i + CHUNK);
+        try {
+          const rcJson = await blogsApi.getReadCount({ client, targetUin, blogIds: chunk });
+          const rcData = rcJson && rcJson.data || {};
+          const itemList = Array.isArray(rcData.itemList) ? rcData.itemList : [];
           for (const item of itemList) {
             if (item.id && item.read !== undefined) readMap.set(String(item.id), item.read);
           }
-          let filled = 0;
-          for (const b of all) {
-            const id = String(b.blogId || b.blogid || b.id);
-            if (readMap.has(id)) {
-              b.readnum = readMap.get(id);
-              filled++;
-            }
-          }
-          logger.info(`[blogs] read counts: ${filled}/${all.length} blogs have readnum`);
+        } catch (e) {
+          chunkFail++;
+          logger.warn(`[blogs] read count chunk ${i}-${i + chunk.length} failed: ${e.message}`);
         }
-      } catch (e) {
-        logger.warn(`[blogs] read count fetch failed: ${e.message}`);
+        if (blogIds.length > CHUNK) await randomSleep(800);
+      }
+      if (readMap.size > 0) {
+        let filled = 0;
+        for (const b of all) {
+          const id = String(b.blogId || b.blogid || b.id);
+          if (readMap.has(id)) { b.readnum = readMap.get(id); filled++; }
+        }
+        logger.info(`[blogs] read counts: ${filled}/${all.length} blogs have readnum`
+          + (skippedReadCount ? ` (skipped ${skippedReadCount} with non-standard ids)` : '')
+          + (chunkFail ? `, ${chunkFail} chunk(s) failed` : ''));
+      } else if (skippedReadCount) {
+        logger.info(`[blogs] read counts: skipped ${skippedReadCount} blogs with non-standard ids`);
       }
     }
   }
