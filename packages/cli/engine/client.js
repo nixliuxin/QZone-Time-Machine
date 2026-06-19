@@ -212,7 +212,14 @@ class QzoneClient {
       throw new AuthInvalidError(-1, 'Session expired (age > 20h). Please re-login.', null);
     }
     if (remaining < 30 * 60 * 1000) {
-      this.logger('warn', `Session expires in ~${Math.round(remaining / 60000)} minutes. Consider re-login soon.`);
+      // The 20h window is only a heuristic; the real p_skey lifetime varies.
+      // Throttle this advisory to once every 10 min so it doesn't spam the log
+      // on every request once we enter the warning window.
+      const now = Date.now();
+      if (now - (this._lastSessionWarn || 0) >= 10 * 60 * 1000) {
+        this._lastSessionWarn = now;
+        this.logger('warn', `Session may expire in ~${Math.round(remaining / 60000)} min (heuristic). Re-login if requests start failing.`);
+      }
     }
   }
 

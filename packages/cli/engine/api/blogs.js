@@ -34,7 +34,8 @@ async function getBlogs({ client, targetUin, page, pageSize = 50 }) {
   );
 }
 
-/** Blog read counts (max 500 IDs per call) */
+/** Blog read counts. QZone caps this batch at ~47 ids/call (else -4003); the
+ * collector chunks accordingly. idList must be non-empty (empty also -4003). */
 async function getReadCount({ client, targetUin, blogIds }) {
   return client.getJson(
     REST_URLS.BLOGS_READ_COUNT_URL,

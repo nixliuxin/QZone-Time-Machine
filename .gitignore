@@ -5,6 +5,7 @@ dist/
 # Auth / secrets
 cookies.json
 auth.json
+session_meta.json
 *.cookie
 qrcode.png
 

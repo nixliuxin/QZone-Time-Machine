@@ -246,12 +246,14 @@ program
   .option('--no-convert', 'Skip automatic conversion to viewer format')
   .option('--no-enrich-comments', 'Skip comment enrichment (enabled by default)')
   .option('--no-enrich-likes', 'Skip like enrichment (enabled by default)')
+  .option('--likes-count-only', 'Likes: keep only the embedded count (likeTotal); skip the per-item liker-list fetch (much faster)', false)
   .option('--enrich-visitors', 'Also fetch per-item visitors (API-heavy; off by default)', false)
   .option('--sample <pages>', 'Sample mode: limit pages per module', '0')
   .option('--inline-concurrency <n>', 'Concurrent inline resource downloads', '6')
   .option('--incremental', 'Only fetch new items (ID-based dedup against existing data)', false)
   .option('--scope <mode>', 'Sync depth: "full" (rescan lists + backfill details/media) or "topup" (trust local lists; only backfill missing per-item data; API-light)', 'full')
   .option('--fill-missing', '[deprecated] alias for --scope topup', false)
+  .option('--reconcile-ids', 'Repair synthetic ids in converted-legacy data (blogs/boards/albums) before enrichment', false)
   .option('--min-gap <ms>', 'Minimum gap between API requests (anti-ban throttle)', '500')
   .option('--rl-threshold <n>', 'Abort run after N consecutive rate-limit responses (0=never)', '3')
   .action(async (targetUinStr, opts) => {
@@ -436,6 +438,28 @@ program
         logger.warn(`Failed to write owner meta: ${e.message}`);
       }
 
+      // 1.5) Reconcile synthetic ids (converted-legacy data) BEFORE enrichment,
+      // so blogs readnum / comments / likes and photo enrichment all address the
+      // corrected real ids in this same pass. No-op (zero API) when no synthetic
+      // ids are present. Opt-in via --reconcile-ids.
+      if (opts.reconcileIds) {
+        try {
+          const { reconcileUser } = require('../engine/reconcile.js');
+          logger.info('--- reconcile-ids ---');
+          const rep = await reconcileUser({ client, userDir, targetUin, apply: true, logger });
+          for (const mod of Object.keys(rep.modules)) {
+            const rm = rep.modules[mod];
+            if (rm && rm.synthetic > 0) {
+              logger.info(`[reconcile] ${mod}: synthetic=${rm.synthetic} changed=${rm.changed ?? 0} matched=${rm.matched} ambiguous=${rm.ambiguous} unmatched=${rm.unmatched}`);
+            }
+          }
+        } catch (err: any) {
+          if (err instanceof AuthInvalidError) throw err;
+          if (err instanceof CircuitOpenError) throw err;
+          logger.warn(`[reconcile] error: ${err.message}`);
+        }
+      }
+
       // 2) Messages
       const m = await runModule('messages', () =>
         collectMessages({ client, targetUin, outputRoot: userDir, progress, logger, pageLimit: samplePages, incremental })
@@ -581,7 +605,7 @@ program
           await enrichers.enrichLikes({
             client, items: msgItemsL,
             buildKey: (it: any) => buildUniKey('mood', targetUin, it.tid),
-            label: 'messages', logger,
+            label: 'messages', logger, countOnly: opts.likesCountOnly,
           });
           writeData(join(userDir, 'data', 'messages.json'), msgItemsL);
         }
@@ -590,7 +614,7 @@ program
           await enrichers.enrichLikes({
             client, items: blogItemsL,
             buildKey: (it: any) => buildUniKey('blog', targetUin, it.blogId || it.blogid),
-            label: 'blogs', logger,
+            label: 'blogs', logger, countOnly: opts.likesCountOnly,
           });
           writeData(join(userDir, 'data', 'blogs.json'), blogItemsL);
         }
@@ -600,7 +624,7 @@ program
           await enrichers.enrichLikes({
             client, items: shareItemsL,
             buildKey: (it: any) => buildUniKey('share', targetUin, it.id || it.shareid),
-            label: 'shares', logger,
+            label: 'shares', logger, countOnly: opts.likesCountOnly,
           });
           writeData(join(userDir, 'data', 'shares.json'), shareItemsL);
         }
@@ -618,7 +642,7 @@ program
               await enrichers.enrichLikes({
                 client, items: photos,
                 buildKey: (it: any) => buildUniKey('photo', targetUin, it.lloc || it.picKey),
-                label: `photos/${af}`, logger,
+                label: `photos/${af}`, logger, countOnly: opts.likesCountOnly,
               });
               writeData(afPath, photos);
             } catch (e: any) {
@@ -848,18 +872,24 @@ program
   .description('Batch backup all accessible friends')
   .option('-d, --data-dir <dir>', 'Auth data directory', '.')
   .option('-o, --output <dir>', 'Output root directory', './output')
-  .option('--delay <ms>', 'Base delay between users (ms)', '30000')
+  .option('--delay <ms>', 'Base delay between users (ms); also caps the inter-dispatch stagger when --concurrency>1', '30000')
+  .option('--concurrency <n>', 'Starting number of users to back up in parallel (adaptive: auto-ramps up to --max-concurrency, halves + cools down on rate-limit)', '1')
+  .option('--max-concurrency <n>', 'Ceiling for adaptive concurrency auto-ramp (defaults to --concurrency, i.e. no ramp)', '1')
+  .option('--cooldown <ms>', 'Pause window after a rate-limit trip before resuming dispatch at reduced concurrency', '300000')
   .option('--daily-limit <n>', 'Max users to process per run (0=unlimited)', '50')
   .option('--no-download', 'Skip media downloads')
   .option('--no-convert', 'Skip conversion to viewer format')
   .option('--no-enrich-comments', 'Skip comment enrichment (enabled by default)')
   .option('--no-enrich-likes', 'Skip like enrichment (enabled by default)')
+  .option('--likes-count-only', 'Likes: keep only the embedded count (likeTotal); skip the per-item liker-list fetch (much faster)', false)
   .option('--enrich-visitors', 'Also fetch per-item visitors (API-heavy; off by default)', false)
   .option('--skip <uins>', 'Comma-separated UINs to skip')
+  .option('--start-index <n>', 'Resume from the Nth target in the full list (1-based, matches the [N/total] progress label); skips everything before it without re-checking', '0')
   .option('--sample <pages>', 'Sample mode: limit pages per module', '0')
   .option('--incremental', 'Only fetch new items (ID-based dedup)', false)
   .option('--scope <mode>', 'Sync depth: "full" (rescan lists + backfill details/media) or "topup" (trust local lists; only backfill missing per-item data; API-light, only tops up existing backups)', 'full')
   .option('--fill-missing', '[deprecated] alias for --scope topup', false)
+  .option('--reconcile-ids', 'Repair synthetic ids in converted-legacy data (blogs/boards/albums) before enrichment', false)
   .option('--min-gap <ms>', 'Minimum gap between API requests (anti-ban throttle)', '500')
   .option('--rl-threshold <n>', 'Stop the batch after N consecutive rate-limit responses (0=never)', '3')
   .option('--access-file <path>', 'Optional access_status.json (from check-access): skip inaccessible targets')
@@ -940,26 +970,26 @@ program
     }
 
     const delay = parseInt(opts.delay, 10) || 30000;
+    const startConc = Math.max(1, parseInt(opts.concurrency, 10) || 1);
+    const maxConc = Math.max(startConc, parseInt(opts.maxConcurrency, 10) || startConc);
+    const cooldownMs = Math.max(0, parseInt(opts.cooldown, 10) || 300000);
+    const startIndex = Math.max(0, parseInt(opts.startIndex, 10) || 0);
+    const RAMP_AFTER = 4;     // clean account completions before +1 concurrency
+    const MAX_BACKOFFS = 6;   // consecutive rate-limit backoffs (no recovery) before full stop
     let processedCount = 0;
+    let stop = false;
+    let stopReason = '';
 
+    // Pre-filter the eligible targets (same skip rules as before) so the worker
+    // pool only has real work to dispatch.
+    const eligible: { uin: any; name: string; idx: number }[] = [];
     for (let i = 0; i < items.length; i++) {
-      // Check daily limit
-      if (dailyLimit > 0 && processedCount >= dailyLimit) {
-        logger.info(`Daily limit reached (${dailyLimit} users). Stopping. Resume next run.`);
-        break;
-      }
-
-      // Re-check session age periodically
-      const sessRemaining = session.estimatedRemainingMs(dataDir);
-      if (sessRemaining <= 10 * 60 * 1000) {
-        logger.warn(`Session expires in ~${Math.round(sessRemaining / 60000)} min. Stopping to avoid wasted requests.`);
-        break;
-      }
-
       const friend = items[i];
       const uin = friend.uin || friend.fuin;
       const name = friend.remark || friend.name || `User_${uin}`;
-
+      if (startIndex > 0 && (i + 1) < startIndex) {
+        continue; // --start-index: silently skip everything before the resume point
+      }
       if (skipSet.has(String(uin))) {
         logger.info(`[${i + 1}/${items.length}] SKIP ${uin} (${name})`);
         continue;
@@ -968,9 +998,9 @@ program
         logger.info(`[${i + 1}/${items.length}] SKIP ${uin} (${name}) - inaccessible per access file`);
         continue;
       }
-      // topup only tops up accounts that ALREADY have a real backup on
-      // disk; it must never fabricate a new (empty) backup for a never-collected
-      // friend (e.g. service accounts). Such targets need a full backup instead.
+      // topup only tops up accounts that ALREADY have a real backup on disk; it
+      // must never fabricate a new (empty) backup for a never-collected friend
+      // (e.g. service accounts). Such targets need a full backup instead.
       if (fillMissing) {
         const hasBackup = existsSync(opts.output) && readdirSync(opts.output).some(
           (d: string) => d.startsWith(`${uin}_`) && existsSync(join(opts.output, d, 'data'))
@@ -980,59 +1010,131 @@ program
           continue;
         }
       }
+      eligible.push({ uin, name, idx: i });
+    }
 
-      logger.info(`[${i + 1}/${items.length}] Backing up ${uin} (${name})`);
+    logger.info(`${eligible.length} eligible targets; adaptive concurrency start=${startConc} max=${maxConc}, cooldown=${Math.round(cooldownMs / 1000)}s on rate-limit`);
 
-      const { execSync } = require('child_process');
-      const thisScript = process.argv[1];
-      const args = ['backup', String(uin), '-d', dataDir, '-o', opts.output, '-n', `"${name}"`];
+    const { spawn } = require('child_process');
+    const thisScript = process.argv[1];
+    const projRoot = resolve(fileURLToPath(import.meta.url), '../../..');
+
+    const buildArgs = (uin: any, name: string) => {
+      const args = ['backup', String(uin), '-d', dataDir, '-o', opts.output, '-n', name];
       if (!opts.download) args.push('--no-download');
       if (!opts.convert) args.push('--no-convert');
       if (opts.enrichComments === false) args.push('--no-enrich-comments');
       if (opts.enrichLikes === false) args.push('--no-enrich-likes');
+      if (opts.likesCountOnly) args.push('--likes-count-only');
       if (opts.enrichVisitors) args.push('--enrich-visitors');
       if (opts.incremental) args.push('--incremental');
       if (fillMissing) args.push('--scope', 'topup');
+      if (opts.reconcileIds) args.push('--reconcile-ids');
       if (opts.sample !== '0') args.push('--sample', opts.sample);
       if (opts.minGap) args.push('--min-gap', String(opts.minGap));
       if (opts.rlThreshold != null) args.push('--rl-threshold', String(opts.rlThreshold));
+      return args;
+    };
 
-      const t0 = Date.now();
-      try {
-        const projRoot = resolve(fileURLToPath(import.meta.url), '../../..');
-        const cmd = `npx tsx "${thisScript}" ${args.join(' ')}`;
-        execSync(cmd, { stdio: 'inherit', cwd: projRoot });
-      } catch (e: any) {
-        // Exit code 75 = the child tripped the rate-limit circuit breaker.
-        // Stop the whole batch immediately rather than marching into a ban.
-        if (e && e.status === 75) {
-          logger.error(`Rate-limit circuit tripped while backing up ${uin}. ` +
-            `Stopping the batch. Wait a while (hours), then re-run backup-all to resume — progress is saved.`);
-          break;
-        }
-        // Exit code 77 = the child's session (p_skey) expired. Every remaining
-        // user would fail the same way, so pause the whole batch and prompt for
-        // re-login instead of marching through hundreds of doomed attempts.
-        if (e && e.status === 77) {
-          logger.error(`Session expired while backing up ${uin}. ` +
-            `Pausing the batch. Re-login (desktop login shell), then re-run backup-all to resume — progress is saved.`);
-          break;
-        }
-        logger.error(`Failed to backup ${uin}: ${e.message}`);
-      }
+    // Pick the lightest launcher for child backups. When running the compiled
+    // build (thisScript is a .js), spawn `node script` DIRECTLY — one process per
+    // child. The old `npx tsx script` path forks npx→tsx→node (3 procs/child) and,
+    // over hundreds of sequential children, leaks handles/memory in the parent
+    // until its event loop drains and it silently exits 0 mid-batch (observed
+    // dying around the ~265th child). Direct node avoids that entirely. Only fall
+    // back to `npx tsx` when actually running TypeScript source in dev.
+    const isCompiled = /\.[cm]?js$/.test(thisScript);
+    const [childCmd, childPrefix] = isCompiled
+      ? [process.execPath, [thisScript]]
+      : ['npx', ['tsx', thisScript]];
 
-      processedCount++;
-      const elapsed = Date.now() - t0;
-      if (i < items.length - 1 && elapsed > 5000) {
-        // Randomized inter-user delay: base ± 50%, with extra jitter
-        const jitter = delay * (0.5 + Math.random());
-        const wait = Math.round(jitter);
-        logger.info(`[${processedCount}/${dailyLimit || '∞'}] Waiting ${Math.round(wait / 1000)}s before next user...`);
-        await new Promise(r => setTimeout(r, wait));
+    // spawn (no shell) so names with spaces/quotes are passed verbatim and
+    // resolve the child's exit code (75 = rate-limit circuit, 77 = session).
+    const runOne = (uin: any, name: string) => new Promise<number>((resolveP) => {
+      const child = spawn(childCmd, [...childPrefix, ...buildArgs(uin, name)], { stdio: 'inherit', cwd: projRoot });
+      child.on('exit', (code: number | null) => resolveP(code == null ? 0 : code));
+      child.on('error', (err: any) => { logger.error(`spawn failed for ${uin}: ${err.message}`); resolveP(0); });
+    });
+
+    // Adaptive concurrency controller (AIMD): a sustained run of clean account
+    // completions ramps `target` up (+1) toward maxConc; a rate-limit circuit
+    // trip (child exit 75) multiplicatively halves `target` and parks dispatch
+    // for a cooldown window — i.e. concurrency temporarily drops to 0, exactly
+    // the user's "stopping == parallelism 0" model. The rate-limited account is
+    // re-queued (backups are idempotent/resumable). Repeated backoffs with no
+    // recovery, a session expiry, or low session age stop the batch for good.
+    const queue = eligible.slice();
+    const inFlight = new Set<Promise<void>>();
+    let target = startConc;
+    let active = 0;
+    let cleanStreak = 0;
+    let backoffs = 0;
+    let cooldownUntil = 0;
+    const sleep = (ms: number) => new Promise<void>(r => setTimeout(r, ms));
+
+    const launch = (item: { uin: any; name: string; idx: number }) => {
+      active++;
+      const p = (async () => {
+        const { uin, name, idx } = item;
+        logger.info(`[${idx + 1}/${items.length}] Backing up ${uin} (${name}) [conc target=${target}, active=${active}]`);
+        const code = await runOne(uin, name);
+        processedCount++;
+        if (code === 77) {
+          stop = true; stopReason = 'session-expired';
+          logger.error(`Session expired while backing up ${uin}. Pausing the batch. Re-login, then re-run backup-all to resume — progress is saved.`);
+        } else if (code === 75) {
+          backoffs++; cleanStreak = 0;
+          const next = Math.max(1, Math.floor(target / 2));
+          logger.warn(`[adaptive] rate-limited on ${uin}: concurrency ${target}→${next}, cooldown ${Math.round(cooldownMs / 1000)}s, re-queueing (backoff ${backoffs}/${MAX_BACKOFFS})`);
+          target = next;
+          cooldownUntil = Date.now() + cooldownMs;
+          queue.push(item);
+          if (backoffs >= MAX_BACKOFFS) {
+            stop = true; stopReason = 'repeated-rate-limit';
+            logger.error(`[adaptive] ${backoffs} rate-limit backoffs without recovery; stopping. Wait hours, then re-run backup-all to resume — progress is saved.`);
+          }
+        } else {
+          if (code !== 0) logger.error(`Backup ${uin} exited with code ${code}`);
+          cleanStreak++;
+          if (cleanStreak >= RAMP_AFTER) {
+            backoffs = 0; // healthy recovery resets the backoff counter
+            if (target < maxConc) { target++; logger.info(`[adaptive] ${RAMP_AFTER} clean in a row → ramp up concurrency to ${target}`); }
+            cleanStreak = 0;
+          }
+        }
+      })();
+      const wrapped = p.then(() => { active--; inFlight.delete(wrapped); });
+      inFlight.add(wrapped);
+    };
+
+    while (!stop) {
+      if (dailyLimit > 0 && processedCount >= dailyLimit) {
+        stop = true; stopReason = stopReason || 'daily-limit';
+        logger.info(`Daily limit reached (${dailyLimit} users). Stopping. Resume next run.`);
+        break;
       }
+      const sessRemaining = session.estimatedRemainingMs(dataDir);
+      if (sessRemaining <= 10 * 60 * 1000) {
+        stop = true; stopReason = stopReason || 'session-age';
+        logger.warn(`Session expires in ~${Math.round(sessRemaining / 60000)} min. Stopping dispatch to avoid wasted requests.`);
+        break;
+      }
+      const now = Date.now();
+      const inCooldown = now < cooldownUntil;
+      if (!inCooldown && active < target && queue.length > 0) {
+        launch(queue.shift()!);
+        await sleep(300 + Math.random() * Math.min(delay, 1200)); // stagger launches
+        continue;
+      }
+      if (queue.length === 0 && active === 0) break; // all done
+      // Cooldown, at target, or queue drained but children still in flight:
+      // wait for the next slot to free up or the cooldown to elapse.
+      const waitMs = inCooldown ? Math.min(cooldownUntil - now, 5000) : 5000;
+      await Promise.race(inFlight.size ? [...inFlight, sleep(waitMs)] : [sleep(waitMs)]);
     }
+    await Promise.all([...inFlight]); // drain in-flight children before reporting
 
-    logger.info(`Batch complete: ${processedCount} users processed in this run`);
+    logger.info(`Batch complete: ${processedCount} users processed in this run` + (stopReason ? ` (stopped: ${stopReason})` : ''));
   });
 
 // ─── convert (legacy format → viewer format) ───
@@ -1371,7 +1473,7 @@ program
             const dstRaw = JSON.parse(readFileSync(dstFile, 'utf8'));
             const dstItems = Array.isArray(dstRaw) ? dstRaw : (dstRaw?.items || []);
             const modName = MODULE_NAMES[file] || file.replace('.json', '');
-            const { merged: items, addedCount } = mergeByIds(dstItems, srcItems, modName);
+            const { merged: items, addedCount } = mergeByIds(dstItems, srcItems, modName, { fieldMerge: true });
             if (addedCount > 0) {
               const out = Array.isArray(dstRaw) ? items : { ...dstRaw, items };
               writeFileSync(dstFile, JSON.stringify(out, null, 2), 'utf8');
@@ -1397,7 +1499,7 @@ program
               const dstArr = JSON.parse(readFileSync(dp, 'utf8'));
               if (!Array.isArray(srcArr) || !Array.isArray(dstArr)) continue;
               const modName = pf === 'albums.json' ? 'albums' : 'photos';
-              const { merged: items, addedCount } = mergeByIds(dstArr, srcArr, modName);
+              const { merged: items, addedCount } = mergeByIds(dstArr, srcArr, modName, { fieldMerge: true });
               if (addedCount > 0) {
                 writeFileSync(dp, JSON.stringify(items, null, 2), 'utf8');
               }
@@ -1434,6 +1536,144 @@ program
     }
 
     console.log(`\nDone: ${merged} merged, ${renamed} renamed, ${unchanged} unchanged`);
+  });
+
+// ─── reconcile-ids ───
+//
+// Repair synthetic ids in converted-from-legacy backups (blogs/boards/albums)
+// by matching each synthetic item to the live LIST and promoting the real
+// QZone id, retaining the synthetic id in `legacyId`. Default is a dry-run
+// report; pass --apply to write. --detect-only scans locally with no API.
+
+program
+  .command('reconcile-ids')
+  .description('Detect & repair synthetic ids in converted legacy data (blogs/boards/albums) by matching live lists')
+  .option('-d, --data-dir <dir>', 'Auth data directory (cookies.json)', '.')
+  .option('-o, --output <dir>', 'Backup root directory containing <uin>_<name> dirs', '.')
+  .option('--apply', 'Write corrected ids (default: dry-run report only)', false)
+  .option('--detect-only', 'Local scan only, no API calls', false)
+  .option('--modules <list>', 'Comma list of modules: blogs,boards,albums', 'blogs,boards,albums')
+  .option('--filter <substr>', 'Only process user dirs whose name includes this substring')
+  .option('--uin <uin>', 'Only process this single uin')
+  .option('--min-gap <ms>', 'Minimum gap between API requests', '600')
+  .option('--rl-threshold <n>', 'Abort after N consecutive rate-limit responses (0=never)', '3')
+  .action(async (opts) => {
+    const { reconcileUser, scanUserDir, ALL_MODULES } = require('../engine/reconcile.js');
+    const rootDir = resolve(opts.output);
+    if (!existsSync(rootDir)) {
+      console.error(`Output directory not found: ${rootDir}`);
+      process.exit(1);
+    }
+    const modules = String(opts.modules).split(',').map((s: string) => s.trim()).filter(Boolean)
+      .filter((m: string) => ALL_MODULES.includes(m));
+    if (modules.length === 0) {
+      console.error(`No valid modules in --modules (allowed: ${ALL_MODULES.join(',')})`);
+      process.exit(1);
+    }
+
+    const userDirs = readdirSync(rootDir)
+      .filter((d) => /^\d+_/.test(d))
+      .filter((d) => existsSync(join(rootDir, d, 'data')))
+      .filter((d) => !opts.filter || d.includes(opts.filter))
+      .filter((d) => !opts.uin || d.startsWith(`${opts.uin}_`) || d === String(opts.uin))
+      .sort();
+
+    const logger = makeLogger('reconcile');
+    logger.info(`scanning ${userDirs.length} user dirs; modules=${modules.join(',')}; mode=${opts.detectOnly ? 'detect-only' : (opts.apply ? 'APPLY' : 'dry-run')}`);
+
+    // Detect-only: pure local scan, no session/network.
+    if (opts.detectOnly) {
+      const affected: any[] = [];
+      const totals: Record<string, { synthetic: number; total: number }> = {};
+      for (const d of userDirs) {
+        const scan = scanUserDir(join(rootDir, d), modules);
+        let any = 0;
+        for (const m of modules) {
+          const s = scan[m] || { synthetic: 0, total: 0 };
+          totals[m] = totals[m] || { synthetic: 0, total: 0 };
+          totals[m].synthetic += s.synthetic; totals[m].total += s.total;
+          any += s.synthetic;
+        }
+        if (any > 0) affected.push({ dir: d, scan });
+      }
+      console.log(`\nAffected user dirs: ${affected.length}/${userDirs.length}`);
+      for (const m of modules) console.log(`  ${m}: ${totals[m].synthetic} synthetic / ${totals[m].total} total`);
+      for (const a of affected) {
+        const parts = modules.map((m) => `${m}=${(a.scan[m] || {}).synthetic || 0}`).filter((p: string) => !p.endsWith('=0'));
+        console.log(`  [synthetic] ${a.dir}: ${parts.join(' ')}`);
+      }
+      const reportPath = join(rootDir, '_reconcile_scan.json');
+      writeFileSync(reportPath, JSON.stringify({ scannedAt: new Date().toISOString(), totals, affected }, null, 2), 'utf8');
+      console.log(`\nReport: ${reportPath}`);
+      return;
+    }
+
+    // Live mode (dry-run match rates or apply): needs a session.
+    const dataDir = resolve(opts.dataDir);
+    const session = new Session({ cookiesFile: join(dataDir, 'cookies.json'), authFile: join(dataDir, 'auth.json') });
+    session.load();
+    if (!session.looksValid()) {
+      console.error('Session expired or invalid. Please run "login" first.');
+      process.exit(1);
+    }
+    const minGap = parseInt(opts.minGap, 10);
+    const rlThreshold = parseInt(opts.rlThreshold, 10);
+    const client = new QzoneClient({
+      session,
+      config: {
+        dataDir,
+        minRequestGapMs: Number.isFinite(minGap) ? minGap : 600,
+        rlCircuitThreshold: Number.isFinite(rlThreshold) ? rlThreshold : 3,
+      },
+    });
+
+    const reports: any[] = [];
+    const sum: Record<string, { synthetic: number; changed: number; matched: number; ambiguous: number; unmatched: number }> = {};
+    for (const m of modules) sum[m] = { synthetic: 0, changed: 0, matched: 0, ambiguous: 0, unmatched: 0 };
+    let idx = 0;
+    for (const d of userDirs) {
+      idx++;
+      const uin = Number((d.match(/^(\d+)_/) || [])[1] || 0);
+      // Quick local pre-check: skip dirs with no synthetic ids (no API spent).
+      const scan = scanUserDir(join(rootDir, d), modules);
+      const hasSynthetic = modules.some((m) => (scan[m] || {}).synthetic > 0);
+      if (!hasSynthetic) continue;
+      logger.info(`[${idx}/${userDirs.length}] ${d} (uin=${uin})`);
+      try {
+        const report = await reconcileUser({ client, userDir: join(rootDir, d), targetUin: uin, modules, apply: !!opts.apply, logger });
+        reports.push(report);
+        for (const m of modules) {
+          const r = report.modules[m]; if (!r) continue;
+          sum[m].synthetic += r.synthetic || 0;
+          sum[m].changed += r.changed || 0;
+          sum[m].matched += r.matched || 0;
+          sum[m].ambiguous += r.ambiguous || 0;
+          sum[m].unmatched += r.unmatched || 0;
+          if (r.synthetic > 0) {
+            logger.info(`  ${m}: synthetic=${r.synthetic} changed=${r.changed ?? 0} matched=${r.matched} ambiguous=${r.ambiguous} unmatched=${r.unmatched}`);
+          }
+        }
+      } catch (err: any) {
+        if (err instanceof CircuitOpenError) {
+          logger.error(`Circuit open (rate limited). Stopping. Re-run later to resume. ${err.message}`);
+          break;
+        }
+        if (err instanceof AuthInvalidError) {
+          logger.error(`Session expired. Re-login then re-run. ${err.message}`);
+          break;
+        }
+        logger.warn(`  ${d}: ${err.message}`);
+      }
+    }
+
+    console.log(`\n=== reconcile summary (${opts.apply ? 'APPLIED' : 'dry-run'}) ===`);
+    for (const m of modules) {
+      const s = sum[m];
+      console.log(`  ${m}: synthetic=${s.synthetic} changed=${s.changed} matched=${s.matched} ambiguous=${s.ambiguous} unmatched=${s.unmatched}`);
+    }
+    const reportPath = join(rootDir, opts.apply ? '_reconcile_applied.json' : '_reconcile_dryrun.json');
+    writeFileSync(reportPath, JSON.stringify({ at: new Date().toISOString(), apply: !!opts.apply, summary: sum, reports }, null, 2), 'utf8');
+    console.log(`\nReport: ${reportPath}`);
   });
 
 program

@@ -85,7 +85,7 @@ function mergeWithExisting(outputFile: string, convertedItems: any[], moduleName
     const base = Array.isArray(existing) ? existing : (existing?.items || []);
     if (base.length === 0) return convertedItems;
 
-    const { merged, addedCount, duplicateCount } = mergeByIds(base, convertedItems, moduleName);
+    const { merged, addedCount, duplicateCount } = mergeByIds(base, convertedItems, moduleName, { fieldMerge: true });
     if (addedCount > 0 || duplicateCount > 0) {
       console.log(`    merge: ${base.length} existing + ${addedCount} new from legacy (${duplicateCount} duplicates skipped)`);
     }

@@ -202,37 +202,35 @@ async function collectBlogs({
     }
     logger.info(`[blogs] detail fetch complete ${detailDone}/${all.length}`);
 
-    // Fetch read counts (batch API). The endpoint is "all-or-nothing": one
-    // malformed id in the batch makes QZone reject the whole call with
-    // -4003 (日志参数错误). Some converted-from-old-data backups contain bogus
-    // sequential ids ("1","2","35"...) alongside real 10-digit blogIds, so we
-    // (1) keep only well-formed numeric ids (>=6 digits) and (2) chunk the
-    // request so any future bad input can only poison its own chunk.
-    const VALID_BLOGID = /^\d{6,}$/;
+    // Fetch read counts (batch API). QZone rejects the WHOLE call with -4003
+    // ("日志参数错误") in two cases: an empty idList, or a batch that is too
+    // large — the real ceiling is ~47 ids per call, despite the endpoint name
+    // implying 500. NOTE: small/old blogIds like "1","2","3" are perfectly
+    // valid and DO return read counts (verified live), so we must NOT filter by
+    // id width; we only drop genuinely empty ids and keep each batch small.
+    const READ_COUNT_CHUNK = 40; // stay safely under QZone's ~47-id ceiling
     const blogIds = [...new Set(
       all.map(b => b.blogId || b.blogid || b.id)
-        .filter(id => VALID_BLOGID.test(String(id)))
+        .filter(id => id !== undefined && id !== null && String(id).trim() !== '')
         .map(String)
     )];
-    const skippedReadCount = all.length - blogIds.length;
     if (blogIds.length > 0) {
-      const CHUNK = 100;
       const readMap = new Map();
       let chunkFail = 0;
-      for (let i = 0; i < blogIds.length; i += CHUNK) {
-        const chunk = blogIds.slice(i, i + CHUNK);
+      for (let i = 0; i < blogIds.length; i += READ_COUNT_CHUNK) {
+        const chunk = blogIds.slice(i, i + READ_COUNT_CHUNK);
         try {
           const rcJson = await blogsApi.getReadCount({ client, targetUin, blogIds: chunk });
           const rcData = rcJson && rcJson.data || {};
           const itemList = Array.isArray(rcData.itemList) ? rcData.itemList : [];
           for (const item of itemList) {
-            if (item.id && item.read !== undefined) readMap.set(String(item.id), item.read);
+            if (item.id !== undefined && item.read !== undefined) readMap.set(String(item.id), item.read);
           }
         } catch (e) {
           chunkFail++;
           logger.warn(`[blogs] read count chunk ${i}-${i + chunk.length} failed: ${e.message}`);
         }
-        if (blogIds.length > CHUNK) await randomSleep(800);
+        if (blogIds.length > READ_COUNT_CHUNK) await randomSleep(800);
       }
       if (readMap.size > 0) {
         let filled = 0;
@@ -241,10 +239,7 @@ async function collectBlogs({
           if (readMap.has(id)) { b.readnum = readMap.get(id); filled++; }
         }
         logger.info(`[blogs] read counts: ${filled}/${all.length} blogs have readnum`
-          + (skippedReadCount ? ` (skipped ${skippedReadCount} with non-standard ids)` : '')
           + (chunkFail ? `, ${chunkFail} chunk(s) failed` : ''));
-      } else if (skippedReadCount) {
-        logger.info(`[blogs] read counts: skipped ${skippedReadCount} blogs with non-standard ids`);
       }
     }
   }

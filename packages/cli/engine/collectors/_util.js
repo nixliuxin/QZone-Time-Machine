@@ -133,6 +133,14 @@ const MODULE_ID_FIELDS = {
 };
 
 /**
+ * Field holding the original (pre-reconcile) synthetic id after an item's
+ * primary id has been promoted to the real QZone id. Kept so that cross-machine
+ * merges (dedup-dirs) and resumes still recognise the synthetic-id copy on the
+ * other machine as the same logical item. See engine/reconcile.js.
+ */
+const LEGACY_ID_FIELD = 'legacyId';
+
+/**
  * Extract the unique ID from an item given its module name.
  * @param {string} moduleName
  * @param {object} item
@@ -146,37 +154,118 @@ function getItemId(moduleName, item) {
 }
 
 /**
- * Merge two item arrays by unique ID.
+ * All identity keys for an item: its primary id plus its retained legacy id
+ * (if any). Two items are the "same logical item" if any of their keys overlap.
+ * @returns {string[]}
+ */
+function getItemKeys(moduleName, item) {
+  const keys = [];
+  const id = getItemId(moduleName, item);
+  if (id !== undefined && id !== null && id !== '') keys.push(String(id));
+  const legacy = item && item[LEGACY_ID_FIELD];
+  if (legacy !== undefined && legacy !== null && legacy !== '') {
+    const ls = String(legacy);
+    if (!keys.includes(ls)) keys.push(ls);
+  }
+  return keys;
+}
+
+/**
+ * Prefer the item whose primary id is "resolved" (a real QZone id) over a
+ * synthetic-id copy. An item carrying a legacyId has been reconciled, so its
+ * primary id is real; an item flagged idUnresolved is still synthetic.
+ */
+function preferResolved(a, b) {
+  const aLegacy = a && a[LEGACY_ID_FIELD] != null;
+  const bLegacy = b && b[LEGACY_ID_FIELD] != null;
+  if (aLegacy && !bLegacy) return a;
+  if (bLegacy && !aLegacy) return b;
+  const aUn = !!(a && a.idUnresolved);
+  const bUn = !!(b && b.idUnresolved);
+  if (aUn && !bUn) return b;
+  if (bUn && !aUn) return a;
+  return a;
+}
+
+const ENRICH_ARRAY_FIELDS = ['comments', 'likes', 'custom_replies', 'custom_comments'];
+const ENRICH_SCALAR_FIELDS = ['readnum', 'custom_html'];
+
+/**
+ * Field-level merge: keep `primary` as the canonical record but backfill any
+ * enrichment the `other` copy has and primary lacks (so neither machine's
+ * comments/likes/readnum/body are lost when the two copies are combined).
+ */
+function mergeFields(primary, other) {
+  const out = { ...other, ...primary };
+  for (const f of ENRICH_ARRAY_FIELDS) {
+    const p = Array.isArray(primary[f]) ? primary[f].length : 0;
+    const o = Array.isArray(other[f]) ? other[f].length : 0;
+    if (o > p) out[f] = other[f];
+  }
+  for (const f of ENRICH_SCALAR_FIELDS) {
+    const empty = (v) => v === undefined || v === null || v === '';
+    if (empty(primary[f]) && !empty(other[f])) out[f] = other[f];
+  }
+  return out;
+}
+
+/**
+ * Merge two item arrays, alias-aware.
  *
- * @param {Array} base      - items to keep when IDs collide (higher priority)
- * @param {Array} incoming  - items to add if their ID is not in base
- * @param {string} moduleName - module name (for ID field lookup)
+ * Items collide when ANY of their identity keys overlap (primary id OR retained
+ * legacyId), so a synthetic-id copy ("35") and its reconciled real-id copy
+ * (real id + legacyId "35") are recognised as the same item instead of being
+ * duplicated. On collision the resolved (real-id) representation is kept; with
+ * opts.fieldMerge the enrichment from both copies is combined.
+ *
+ * @param {Array} base      - items kept when ids collide (higher priority)
+ * @param {Array} incoming  - items added if not already present
+ * @param {string} moduleName
  * @param {object} [opts]
- *   - sortField: field name to sort merged result by (descending), e.g. 'created_time'
+ *   - sortField: sort merged result by this field (descending)
+ *   - fieldMerge: field-level merge enrichment on collision (default false)
  * @returns {{ merged: Array, addedCount: number, duplicateCount: number }}
  */
 function mergeByIds(base, incoming, moduleName, opts = {}) {
-  const seen = new Map();
-  for (const item of base) {
-    const id = getItemId(moduleName, item);
-    if (id !== undefined) seen.set(String(id), item);
-    else seen.set(`__idx_b_${seen.size}`, item);
-  }
+  const fieldMerge = !!opts.fieldMerge;
+  const entries = [];
+  const keyToEntry = new Map();
+  let placeholderN = 0;
+
+  const indexEntry = (item) => {
+    let keys = getItemKeys(moduleName, item);
+    if (keys.length === 0) keys = [`__idx_${placeholderN++}`];
+    let existing = null;
+    for (const k of keys) {
+      if (keyToEntry.has(k)) { existing = keyToEntry.get(k); break; }
+    }
+    if (!existing) {
+      const entry = { item, keys: new Set(keys) };
+      entries.push(entry);
+      for (const k of keys) keyToEntry.set(k, entry);
+      return { entry, isNew: true };
+    }
+    for (const k of keys) { if (!existing.keys.has(k)) { existing.keys.add(k); keyToEntry.set(k, existing); } }
+    return { entry: existing, isNew: false };
+  };
+
+  for (const item of base) indexEntry(item);
 
   let addedCount = 0;
   let duplicateCount = 0;
   for (const item of incoming) {
-    const id = getItemId(moduleName, item);
-    const key = id !== undefined ? String(id) : `__idx_i_${seen.size}`;
-    if (seen.has(key)) {
-      duplicateCount++;
-    } else {
-      seen.set(key, item);
-      addedCount++;
+    const { entry, isNew } = indexEntry(item);
+    if (isNew) { addedCount++; continue; }
+    duplicateCount++;
+    const preferred = preferResolved(entry.item, item);
+    const otherCopy = preferred === entry.item ? item : entry.item;
+    entry.item = fieldMerge ? mergeFields(preferred, otherCopy) : preferred;
+    for (const k of getItemKeys(moduleName, entry.item)) {
+      if (!entry.keys.has(k)) { entry.keys.add(k); keyToEntry.set(k, entry); }
     }
   }
 
-  let merged = [...seen.values()];
+  let merged = entries.map((e) => e.item);
 
   if (opts.sortField) {
     merged.sort((a, b) => {
@@ -190,14 +279,13 @@ function mergeByIds(base, incoming, moduleName, opts = {}) {
 }
 
 /**
- * Build a Set of known item IDs from an existing array.
- * Used by incremental collectors to detect "already fetched" boundary.
+ * Build a Set of known item IDs from an existing array (primary id + legacyId).
+ * Used by incremental collectors to detect the "already fetched" boundary.
  */
 function buildIdSet(items, moduleName) {
   const set = new Set();
   for (const item of items) {
-    const id = getItemId(moduleName, item);
-    if (id !== undefined) set.add(String(id));
+    for (const k of getItemKeys(moduleName, item)) set.add(k);
   }
   return set;
 }
@@ -213,7 +301,10 @@ module.exports = {
   preferOriginal,
   randomSleep,
   MODULE_ID_FIELDS,
+  LEGACY_ID_FIELD,
   getItemId,
+  getItemKeys,
   mergeByIds,
+  mergeFields,
   buildIdSet,
 };

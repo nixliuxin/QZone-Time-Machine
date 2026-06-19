@@ -96,6 +96,32 @@ pnpm cli -- backup 123456789 -n "昵称" --scope topup
 
 > 旧的 `--fill-missing` 仍作为 `--scope topup` 的废弃别名保留。
 
+### 修复旧数据的合成 ID（`--reconcile-ids` / `reconcile-ids`）
+
+从旧版 QZoneExport `convert` 来的数据，**日志 / 留言板 / 相册**有时带的是「合成 ID」而非真实 QQ 空间 ID：
+
+- 日志：顺序号 `1` `2` `35`（真实 ID 为 ≥6 位数字）
+- 留言板：短顺序号 `1`..`284`（真实 ID 约 10 位）
+- 相册：UUID `06bf9fe4-...`（真实 ID 为字母数字/数字）
+
+合成 ID **无法被逐条接口寻址**（阅读数 / 评论 / 点赞会失败），且会让跨机合并（`dedup-dirs`）把同一条当成两条而重复。修复方式：重新拉取该模块的 **列表**（便宜、分页），按「标题/内容 + 时间」把每条合成项匹配到 live 列表，将真实 ID 升为主键，原合成 ID 保留到 `legacyId` 字段（保证与另一台机器的合成-ID 副本仍能正确合并、去重）。匹配是保守的：只应用**唯一高置信**匹配；歧义或查不到（如已删除）的条目保留合成 ID 并标记 `idUnresolved`。
+
+```bash
+# 仅本地扫描，统计各号合成 ID（零 API）
+pnpm cli -- reconcile-ids -o ./我的备份 --detect-only
+
+# dry-run：拉 live 列表算匹配率，不写入
+pnpm cli -- reconcile-ids -d ./我的备份 -o ./我的备份
+
+# 实际回填（写入真实 ID + legacyId）
+pnpm cli -- reconcile-ids -d ./我的备份 -o ./我的备份 --apply
+
+# 或在批量备份时一并修复（修 ID 在 enrich 之前，故同一轮即可补回阅读数/评论/点赞）
+pnpm cli -- backup-all -d ./我的备份 -o ./我的备份 --scope topup --no-download --reconcile-ids
+```
+
+> 报告写入备份根目录：`_reconcile_scan.json`（detect-only）/ `_reconcile_dryrun.json` / `_reconcile_applied.json`。
+
 ## 输出结构
 
 每个用户生成一个独立的自包含目录：

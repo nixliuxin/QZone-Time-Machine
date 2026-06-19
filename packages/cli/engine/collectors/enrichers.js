@@ -258,8 +258,22 @@ async function enrichShareComments({ client, targetUin, items, logger = console 
 
 /**
  * @param {Function} buildKey  function(item) => unikey
+ * @param {boolean} countOnly  when true, do NOT fetch per-item liker lists;
+ *   just normalise the like COUNT (likeTotal) already embedded in the list
+ *   payload. Zero network. `likes` is left absent so a later default run can
+ *   still upgrade to the full liker list.
  */
-async function enrichLikes({ client, items, buildKey, label = 'item', logger = console, progressEvery = 50 }) {
+async function enrichLikes({ client, items, buildKey, label = 'item', logger = console, progressEvery = 50, countOnly = false }) {
+  if (countOnly) {
+    let n = 0;
+    for (const it of items) {
+      const c = it.likeTotal ?? it.like ?? it.likecnt ?? it.likeNum ?? it.likeNum2;
+      const v = Number(c);
+      if (Number.isFinite(v)) { it.likeTotal = v; n++; }
+    }
+    if (n) logger.info(`[enrich] ${label} likes: count-only (no liker list), ${n} counts kept`);
+    return 0;
+  }
   let touched = 0;
   let skipped = 0;
   // Pre-count how many items actually need a like fetch so progress is meaningful.

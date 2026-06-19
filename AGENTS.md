@@ -27,6 +27,7 @@ Open-source monorepo for **QZone-Time-Machine** — a toolkit that backs up QQ Z
 | `packages/cli/engine/progress.js` | Checkpoint/resume state persistence |
 | `packages/cli/engine/downloader.js` | Concurrent file downloader with validation |
 | `packages/cli/engine/qr-login.js` | Puppeteer-based QR code login flow |
+| `packages/cli/engine/reconcile.js` | Repair synthetic ids in converted-legacy data (blogs/boards/albums) by matching live lists; promotes real id, retains synthetic as `legacyId` |
 | `packages/cli/src/index.ts` | CLI entry point (commander) |
 | `packages/cli/src/convert.ts` | Legacy data converter (old format → new JSON) |
 | `packages/viewer/src/` | React + Tailwind offline SPA |
