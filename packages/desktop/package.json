@@ -1,6 +1,6 @@
 {
   "name": "@qzone-tools/desktop",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
   "description": "QQ Zone Time Machine desktop app (Electron + React). Currently: clean QZone login (no automation fingerprint) that writes cookies.json/auth.json for the CLI.",
   "main": "out/main/index.js",
