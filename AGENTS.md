@@ -7,6 +7,7 @@ For format-specific knowledge, see `.cursor/rules/`:
 
 - `english-only.mdc` — language policy
 - `no-cursor-attribution.mdc` — commit hygiene
+- `no-personal-info.mdc` — no personal stats/paths in published content
 - `versioning.mdc` — SemVer policy
 
 ## What this repo is
@@ -53,6 +54,11 @@ Open-source monorepo for **QZone-Time-Machine** — a toolkit that backs up QQ Z
    already validated files.
 6. **Never commit secrets.** `cookies.json`, `auth.json`, and any file
    containing authentication tokens must be gitignored.
+7. **No personal information in published content.** Release notes, docs,
+   commit messages, CLI help examples, and comments must not include real
+   backup statistics (friend/archive counts), local paths, QQ UINs, or
+   friend nicknames from a personal run. Use generic placeholders.
+   See `.cursor/rules/no-personal-info.mdc`.
 
 ## Pipeline overview
 
@@ -82,3 +88,4 @@ QR Login → Session (cookies + g_tk)
 - English-only policy → `.cursor/rules/english-only.mdc`
 - Commit hygiene → `.cursor/rules/no-cursor-attribution.mdc`
 - Versioning → `.cursor/rules/versioning.mdc`
+- No personal info → `.cursor/rules/no-personal-info.mdc`

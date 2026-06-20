@@ -25,3 +25,7 @@ Thumbs.db
 *.tsbuildinfo
 packages/launcher/build/
 packages/launcher/dist-exe/
+
+# Local debug / batch scripts (personal paths — never commit)
+packages/cli/measure-data.mjs
+packages/cli/scripts/probe-enrich.cjs
