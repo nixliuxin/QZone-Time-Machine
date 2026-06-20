@@ -88,6 +88,49 @@ function splitId(id: string): { uin?: number; suffix?: string } {
 
 const COUNT_KEYS = ['messages_count', 'blogs_count', 'photos_count', 'boards_count', 'videos_count', 'friends_count', 'shares_count', 'diaries_count'];
 
+function countJsonFile(dataDir: string, file: string): number {
+  const p = join(dataDir, file);
+  if (!existsSync(p)) return 0;
+  try {
+    const data = JSON.parse(readFileSync(p, 'utf8'));
+    if (Array.isArray(data)) return data.length;
+    if (data && Array.isArray(data.items)) return data.items.length;
+    return 0;
+  } catch {
+    return 0;
+  }
+}
+
+function countPhotosFromData(dataDir: string): number {
+  const p = join(dataDir, 'photos', 'albums.json');
+  if (!existsSync(p)) return 0;
+  try {
+    const data = JSON.parse(readFileSync(p, 'utf8'));
+    return Array.isArray(data) ? data.reduce((s: number, a: { total?: number }) => s + (a.total || 0), 0) : 0;
+  } catch {
+    return 0;
+  }
+}
+
+/** Derive module counts from data/*.json when user.json lacks *_count fields (common after --scope topup). */
+function countsFromDataDir(dataDir: string): Record<string, number> {
+  const raw: Record<string, number> = {
+    messages: countJsonFile(dataDir, 'messages.json'),
+    blogs: countJsonFile(dataDir, 'blogs.json'),
+    photos: countPhotosFromData(dataDir),
+    boards: countJsonFile(dataDir, 'boards.json'),
+    videos: countJsonFile(dataDir, 'videos.json'),
+    friends: countJsonFile(dataDir, 'friends.json'),
+    shares: countJsonFile(dataDir, 'shares.json'),
+    diaries: countJsonFile(dataDir, 'diaries.json'),
+  };
+  const counts: Record<string, number> = {};
+  for (const [k, v] of Object.entries(raw)) {
+    if (v > 0) counts[k] = v;
+  }
+  return counts;
+}
+
 /** Top-level entries to include, in archive-root-relative form. */
 function topLevelEntries(userDir: string): string[] {
   const entries: string[] = [];
@@ -318,11 +361,12 @@ function readManifestUser(userDir: string, id: string): ManifestUser {
   try {
     const j = JSON.parse(readFileSync(userJson, 'utf8'));
     const uin = Number(j.uin) || idUin;
-    const counts: Record<string, number> = {};
+    let counts: Record<string, number> = {};
     for (const k of COUNT_KEYS) {
       const v = j[k];
       if (typeof v === 'number' && v > 0) counts[k.replace('_count', '')] = v;
     }
+    if (!Object.keys(counts).length) counts = countsFromDataDir(join(userDir, 'data'));
     // The folder suffix is the remark (备注) chosen at backup time; only treat it
     // as a distinct remark when it differs from the nickname.
     const remark = suffix && suffix !== j.nickname ? suffix : undefined;

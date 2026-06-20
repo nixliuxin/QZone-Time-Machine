@@ -739,6 +739,10 @@ program
       const albumsJsonPath = join(userDir, 'data', 'photos', 'albums.json');
       if (existsSync(albumsJsonPath)) {
         try {
+          const { repairAlbumCoverUrls } = require('../engine/collectors/photos.js');
+          const coverFix = repairAlbumCoverUrls(userDir, logger);
+          if (coverFix.fixed) logger.info(`[photos] backfilled ${coverFix.fixed} album cover paths`);
+
           const albumsRaw = JSON.parse(readFileSync(albumsJsonPath, 'utf8'));
           if (Array.isArray(albumsRaw)) {
             const albumIndex: Record<string, unknown>[] = [];
@@ -1844,6 +1848,33 @@ program
     const logger = makeLogger('pack-folders');
     const r = await packFoldersRaw({ root: rootAbs, out, filter: opts.filter, concurrency: opts.concurrency, skipExisting: opts.skipExisting, logger });
     logger.info(`Done. ${r.packed} packed, ${r.skipped} skipped, ${r.failed} failed. Output: ${out}`);
+  });
+
+program
+  .command('repair-album-covers')
+  .description('Backfill cover_url in albums.json from on-disk cover thumbnails (media/albums/covers/{hash}.{ext})')
+  .argument('<root>', 'Root directory containing user dirs')
+  .option('--filter <substr>', 'Only repair dirs whose name includes this substring')
+  .action((root: string, opts: { filter?: string }) => {
+    const { repairAlbumCoverUrls } = require('../engine/collectors/photos.js');
+    const rootDir = resolve(root);
+    const userDirs = readdirSync(rootDir).filter((d) => {
+      if (d.startsWith('.')) return false;
+      const full = join(rootDir, d);
+      if (!statSync(full).isDirectory()) return false;
+      if (!existsSync(join(full, 'data', 'photos', 'albums.json'))) return false;
+      if (opts.filter && !d.includes(opts.filter)) return false;
+      return true;
+    });
+    let total = 0;
+    for (const dir of userDirs) {
+      const r = repairAlbumCoverUrls(join(rootDir, dir));
+      if (r.fixed) {
+        console.log(`  ${dir}: ${r.fixed} covers`);
+        total += r.fixed;
+      }
+    }
+    console.log(`\nDone: ${total} album covers backfilled across ${userDirs.length} dirs`);
   });
 
 program.parse();

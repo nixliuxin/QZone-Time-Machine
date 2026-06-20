@@ -153,7 +153,7 @@ function card(u){
   if(hasCounts(u)){ const c=document.createElement('div'); c.className='counts';
     Object.keys(u.counts).forEach(k=>{ const s=document.createElement('span'); s.className='chip'; s.textContent=(LABELS[k]||k)+' '+u.counts[k]; c.appendChild(s); });
     meta.appendChild(c);
-  } else { const n=document.createElement('div'); n.className='none'; n.textContent=u.hasBackup?'无归档内容':(u.access==='no_access'?'无访问权限，未备份':'未备份'); meta.appendChild(n); }
+  } else { const n=document.createElement('div'); n.className='none'; n.textContent=u.hasBackup?'已归档，点击查看':(u.access==='no_access'?'无访问权限，未备份':'未备份'); meta.appendChild(n); }
   a.appendChild(av); a.appendChild(meta);
   return a;
 }

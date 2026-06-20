@@ -397,4 +397,37 @@ async function repairAlbumPhotoFiles({ outputRoot, downloader, logger = console 
   return { enqueued: enq };
 }
 
-module.exports = { collectPhotos, repairAlbumPhotoFiles };
+const COVER_EXTS = ['jpeg', 'jpg', 'png', 'gif', 'webp'];
+
+/**
+ * Backfill album cover_url / custom_filepath from on-disk cover files.
+ * Covers are stored as media/albums/covers/{shortHash(album.id)}.{ext}.
+ * Safe to run any time; only fills entries that are missing paths.
+ */
+function repairAlbumCoverUrls(outputRoot, logger = console) {
+  const albumOutFile = path.join(outputRoot, 'data', 'photos', 'albums.json');
+  if (!fs.existsSync(albumOutFile)) return { fixed: 0 };
+  const r = readData(albumOutFile, logger);
+  const albums = (r.ok && Array.isArray(r.value)) ? r.value : [];
+  if (!albums.length) return { fixed: 0 };
+
+  let fixed = 0;
+  for (const album of albums) {
+    if (album.custom_filepath || album.cover_url) continue;
+    if (!album.id) continue;
+    const hash = shortHash(album.id);
+    for (const ext of COVER_EXTS) {
+      const rel = path.posix.join('media', 'albums', 'covers', `${hash}.${ext}`);
+      if (fs.existsSync(path.join(outputRoot, rel))) {
+        album.custom_filepath = rel;
+        album.cover_url = rel;
+        fixed++;
+        break;
+      }
+    }
+  }
+  if (fixed) writeData(albumOutFile, albums);
+  return { fixed };
+}
+
+module.exports = { collectPhotos, repairAlbumPhotoFiles, repairAlbumCoverUrls };
