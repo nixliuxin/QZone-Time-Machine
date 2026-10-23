@@ -15,6 +15,8 @@
  * Field write-back:
  *   image.custom_filepath        - <Module>/images/...
  *   image.custom_pre_filepath    - <Module>/images/... (smallurl, if present)
+ *   comment pic.custom_filepath  - <Module>/images/... (o_url / hd_url / b_url)
+ *   comment pic.custom_pre_filepath - <Module>/images/... (s_url)
  *   video.custom_filepath        - <Module>/videos/...
  *   video.custom_pre_filepath    - <Module>/posters/...
  *   audio.custom_filepath        - <Module>/audios/...
@@ -262,6 +264,77 @@ function expandItemTasks(item, moduleDir, relPrefix) {
   return tasks;
 }
 
+/* ---------- comment image tasks ---------- */
+
+// Comments nest replies under `replies` / `list` / `list_3` depending on the
+// API version. The depth cap keeps a malformed payload from recursing forever.
+function commentImageTasks(comments, moduleDir, relPrefix, depth = 0) {
+  const tasks = [];
+  if (!Array.isArray(comments) || depth > 12) return tasks;
+  for (const c of comments) {
+    if (!c || typeof c !== 'object') continue;
+    if (Array.isArray(c.pic)) {
+      for (const pic of c.pic) {
+        if (pic && typeof pic === 'object') tasks.push(...commentPicTasks(pic, moduleDir, relPrefix));
+      }
+    }
+    for (const k of Object.keys(c)) {
+      if (k !== 'replies' && k !== 'list' && !/^list_\d+$/.test(k)) continue;
+      if (Array.isArray(c[k])) tasks.push(...commentImageTasks(c[k], moduleDir, relPrefix, depth + 1));
+    }
+  }
+  return tasks;
+}
+
+// Comment pictures use o_url / hd_url / b_url / s_url instead of url1 / url2.
+function commentPicTasks(pic, moduleDir, relPrefix) {
+  const tasks = [];
+  let big = pic.o_url || pic.hd_url || pic.b_url || pic.s_url;
+  if (big && /^https?:/.test(big)) big = preferOriginal(big);
+  if (big && /^https?:/.test(big)) {
+    const ext = extFromUrl(big, 'jpg');
+    const fname = `${sha1Of(big)}.${ext}`;
+    const dst = path.join(moduleDir, 'images', fname);
+    if (needsTask(pic, 'custom_filepath', dst)) {
+      tasks.push({
+        url: big, kind: 'image', dst,
+        relpath: `${relPrefix}/images/${fname}`,
+        writeFile: 'custom_filepath', writeUrl: 'custom_url', parent: pic,
+      });
+    }
+  }
+  // s_url is usually the same photo at a smaller size; preferOriginal()
+  // collapses it onto the full-size URL, so no second copy is downloaded.
+  let small = pic.s_url;
+  if (small && /^https?:/.test(small)) small = preferOriginal(small);
+  if (small && /^https?:/.test(small) && small !== big) {
+    const ext = extFromUrl(small, 'jpg');
+    const fname = `${sha1Of(small)}.${ext}`;
+    const dst = path.join(moduleDir, 'images', fname);
+    if (needsTask(pic, 'custom_pre_filepath', dst)) {
+      tasks.push({
+        url: small, kind: 'image', dst,
+        relpath: `${relPrefix}/images/${fname}`,
+        writeFile: 'custom_pre_filepath', writeUrl: 'custom_pre_url', parent: pic,
+      });
+    }
+  }
+  return tasks;
+}
+
+// custom_comments and commentlist hold the same replies in two separate arrays.
+// Both are walked so each copy gets its own local paths; a repeated destination
+// costs one local stat and is resolved by needsTask(), not a second download.
+function expandCommentImageTasks(item, moduleDir, relPrefix) {
+  const tasks = [];
+  for (const list of [item.custom_comments, item.commentlist]) {
+    if (Array.isArray(list) && list.length) {
+      tasks.push(...commentImageTasks(list, moduleDir, relPrefix));
+    }
+  }
+  return tasks;
+}
+
 /* ---------- pool runner ---------- */
 
 async function runPool(tasks, concurrency, onTick, client = null) {
@@ -320,6 +393,10 @@ async function downloadInlineResources(userDir, opts = {}) {
       // Videos module: each top-level item IS a video (not nested in custom_videos)
       if (rule.mediaDir === 'videos') {
         list.push(...videoTasks(it, moduleDir, relPrefix));
+      }
+      // Messages module: comment images live on each comment, not on the item
+      if (rule.mediaDir === 'messages') {
+        list.push(...expandCommentImageTasks(it, moduleDir, relPrefix));
       }
       for (const t of list) {
         if (!downloadVideos && t.kind === 'video') continue;

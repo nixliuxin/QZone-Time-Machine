@@ -1,5 +1,17 @@
 import { formatQQContent } from '../utils/format';
 import { QQLink } from './QQLink';
+import { MediaGrid } from './MediaGrid';
+
+interface CommentPic {
+  o_url?: string;
+  hd_url?: string;
+  b_url?: string;
+  s_url?: string;
+  custom_filepath?: string;
+  custom_pre_filepath?: string;
+  b_width?: number;
+  b_height?: number;
+}
 
 interface Comment {
   content?: string;
@@ -12,7 +24,9 @@ interface Comment {
   custom_create_time?: string;
   replies?: Comment[];
   list?: Comment[];
+  list_3?: Comment[];
   uin?: number;
+  pic?: CommentPic[];
 }
 
 interface CommentListProps {
@@ -46,9 +60,17 @@ function CommentItem({ comment, depth = 0 }: { comment: Comment; depth?: number 
     time = comment.custom_create_time;
   }
 
-  const replies = comment.replies || comment.list || [];
+  const replies = comment.replies || comment.list || comment.list_3 || [];
 
   const avatarUrl = comment.uin ? `./media/avatars/${comment.uin}.jpg` : '';
+
+  const picItems = (comment.pic || [])
+    .map((p) => ({
+      src: p.custom_filepath || p.o_url || p.hd_url || p.b_url || '',
+      thumb: p.custom_pre_filepath || p.custom_filepath || p.s_url || '',
+      meta: { width: p.b_width || undefined, height: p.b_height || undefined },
+    }))
+    .filter((m) => m.src);
 
   return (
     <div className={depth > 0 ? 'ml-4 pl-3 border-l border-[hsl(var(--border))]' : ''}>
@@ -75,6 +97,11 @@ function CommentItem({ comment, depth = 0 }: { comment: Comment; depth?: number 
               className="text-sm text-[hsl(var(--foreground))] mt-0.5 whitespace-pre-wrap [&_.qq-emoji]:inline-block [&_.qq-emoji]:w-5 [&_.qq-emoji]:h-5 [&_.qq-emoji]:align-text-bottom"
               dangerouslySetInnerHTML={{ __html: contentHtml }}
             />
+          )}
+          {picItems.length > 0 && (
+            <div className="mt-2">
+              <MediaGrid items={picItems} maxVisible={9} />
+            </div>
           )}
         </div>
       </div>
